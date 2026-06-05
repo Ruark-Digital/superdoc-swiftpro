@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { parseHostMessage, postToHost, type SuperdocOutbound } from "./bridge";
+import { parseHostMessage, postToHost, parseHostCommand, buildRedlines, buildRedlineClicked, type SuperdocOutbound } from "./bridge";
 
 const HOST = "http://localhost:5173";
 const EVIL = "http://evil.example.com";
@@ -86,6 +86,35 @@ describe("parseHostMessage — passthrough & defaults", () => {
   it("preserves valid non-default documentMode", () => {
     const result = parseHostMessage(msg(HOST, validInitData({ documentMode: "suggesting" })), HOST);
     expect(result?.payload.documentMode).toBe("suggesting");
+  });
+});
+
+describe("redline messages", () => {
+  it("parseHostCommand accepts apply-redline from the host origin", () => {
+    const r = parseHostCommand(msg(HOST, { type: "superdoc:apply-redline", payload: { redlineId: "r1", replacement: "x" } }), HOST);
+    expect(r).toEqual({ type: "superdoc:apply-redline", payload: { redlineId: "r1", replacement: "x" } });
+  });
+  it("parseHostCommand accepts focus-redline", () => {
+    const r = parseHostCommand(msg(HOST, { type: "superdoc:focus-redline", payload: { redlineId: "r1" } }), HOST);
+    expect(r).toEqual({ type: "superdoc:focus-redline", payload: { redlineId: "r1" } });
+  });
+  it("parseHostCommand rejects a foreign origin", () => {
+    expect(parseHostCommand(msg(EVIL, { type: "superdoc:focus-redline", payload: { redlineId: "r1" } }), HOST)).toBeNull();
+  });
+  it("parseHostCommand rejects malformed apply-redline", () => {
+    expect(parseHostCommand(msg(HOST, { type: "superdoc:apply-redline", payload: { redlineId: "r1" } }), HOST)).toBeNull();
+    expect(parseHostCommand(msg(HOST, { type: "superdoc:apply-redline" }), HOST)).toBeNull();
+  });
+  it("parseHostCommand returns null for non-command types", () => {
+    expect(parseHostCommand(msg(HOST, { type: "superdoc:init" }), HOST)).toBeNull();
+  });
+  it("buildRedlines posts the array", () => {
+    expect(buildRedlines([{ redlineId: "r1", kind: "insertion", text: "x" }])).toEqual({
+      type: "superdoc:redlines", payload: { redlines: [{ redlineId: "r1", kind: "insertion", text: "x" }] },
+    });
+  });
+  it("buildRedlineClicked", () => {
+    expect(buildRedlineClicked("r1")).toEqual({ type: "superdoc:redline-clicked", payload: { redlineId: "r1" } });
   });
 });
 

@@ -13,6 +13,15 @@
 
 export type DocumentMode = "editing" | "viewing" | "suggesting";
 
+export type RedlineKind = "insertion" | "deletion";
+export interface RedlineSpan {
+  redlineId: string;
+  kind: RedlineKind;
+  text: string;
+  author?: string;
+  createdAt?: string;
+}
+
 const DOCUMENT_MODES: readonly DocumentMode[] = ["editing", "viewing", "suggesting"];
 
 /** Payload of the single inbound message the host sends us. */
@@ -43,7 +52,9 @@ export type SuperdocOutbound =
   | { type: "superdoc:ready" }
   | { type: "superdoc:editor-ready"; payload: { pageCount?: number } }
   | { type: "superdoc:doc-edit" }
-  | { type: "superdoc:error"; payload: { message: string } };
+  | { type: "superdoc:error"; payload: { message: string } }
+  | { type: "superdoc:redlines"; payload: { redlines: RedlineSpan[] } }
+  | { type: "superdoc:redline-clicked"; payload: { redlineId: string } };
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -98,6 +109,36 @@ export function parseHostMessage(event: MessageEvent, hostOrigin: string): Super
       wsUrl: payload.wsUrl,
     },
   };
+}
+
+/** Commands the host sends us to act on the document. */
+export type HostCommand =
+  | { type: "superdoc:apply-redline"; payload: { redlineId: string; replacement: string } }
+  | { type: "superdoc:focus-redline"; payload: { redlineId: string } };
+
+export function parseHostCommand(event: MessageEvent, hostOrigin: string): HostCommand | null {
+  if (event.origin !== hostOrigin) return null;
+  const data: unknown = event.data;
+  if (!isObject(data)) return null;
+  if (data.type === "superdoc:apply-redline") {
+    const p = data.payload;
+    if (!isObject(p) || typeof p.redlineId !== "string" || typeof p.replacement !== "string") return null;
+    return { type: "superdoc:apply-redline", payload: { redlineId: p.redlineId, replacement: p.replacement } };
+  }
+  if (data.type === "superdoc:focus-redline") {
+    const p = data.payload;
+    if (!isObject(p) || typeof p.redlineId !== "string") return null;
+    return { type: "superdoc:focus-redline", payload: { redlineId: p.redlineId } };
+  }
+  return null;
+}
+
+export function buildRedlines(redlines: RedlineSpan[]): SuperdocOutbound {
+  return { type: "superdoc:redlines", payload: { redlines } };
+}
+
+export function buildRedlineClicked(redlineId: string): SuperdocOutbound {
+  return { type: "superdoc:redline-clicked", payload: { redlineId } };
 }
 
 /**
