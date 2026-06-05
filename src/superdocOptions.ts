@@ -34,6 +34,7 @@ export function buildSuperdocOptions(
 ) {
   return {
     selector: "#editor",
+    toolbar: "#superdoc-toolbar",
     document: new Blob([payload.docBytes], { type: DOCX_MIME }),
     documentMode: payload.documentMode,
     user: payload.user,

@@ -22,6 +22,80 @@ body {
 }
 
 #editor {
-  height: 100vh;
   overflow: auto;
+}
+
+/* Toolbar pinned on top; editor fills the rest and scrolls. */
+body {
+  display: flex;
+  flex-direction: column;
+}
+#superdoc-toolbar {
+  flex: 0 0 auto;
+  border-bottom: 1px solid #e5e7eb;
+  background: #fff;
+}
+#editor {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/*
+ * Disable SuperDoc's built-in comments UI. The SwiftPro host owns commenting via
+ * its own sidebar ("custom comment section"), so we suppress SuperDoc's comment
+ * chrome here. SuperDoc has no config flag to turn comments off (only display
+ * tweaks), so this hides the rendered widgets. Imported Word comments still load
+ * in the model but are not shown.
+ *
+ * Comment *widgets* (layer, floating bubbles, popovers, dialogs, anchors) are
+ * UI chrome — safe to remove entirely.
+ */
+.superdoc__comments-layer,
+.comments-layer,
+.floating-comments,
+.floating-comment,
+.sd-comment-box,
+.sd-comment-anchor,
+.comments-dialog,
+.comments-list,
+.comments-dropdown,
+.superdoc__compact-comment-popover,
+.new-comment-input-wrapper {
+  display: none !important;
+}
+
+/*
+ * Commented text is wrapped in a highlight span — do NOT hide it (that would
+ * hide the document text). Just strip the highlight styling so it reads as
+ * normal body text.
+ */
+.sd-editor-comment-highlight {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  cursor: text !important;
+}
+
+/*
+ * Reclaim SuperDoc's built-in right sidebar. It's a fixed 320px column reserved
+ * for the comments UI we just disabled, so it sits empty and shoves the document
+ * to the left. Hiding it returns that space to the page area.
+ */
+.superdoc__right-sidebar {
+  display: none !important;
+}
+
+/*
+ * Center the document horizontally. In paginated/presentation mode the
+ * `.superdoc__sub-document` shrinks to the page width (~816px / 8.5in) and sits
+ * at left:0 inside the wider `.superdoc__document` flex row (which used to hold
+ * the now-hidden comments sidebar). `margin:auto` on the flex item centers it;
+ * `justify-content:center` is a belt-and-suspenders fallback.
+ */
+.superdoc {
+  justify-content: center !important;
+}
+.superdoc__layers {
+  margin-left: auto !important;
+  margin-right: auto !important;
 }
