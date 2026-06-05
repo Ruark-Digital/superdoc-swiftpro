@@ -1,3 +1,4 @@
+import type { Editor, SuperDoc } from "@harbour-enterprises/superdoc";
 import type { SuperdocInit } from "./bridge";
 
 const DOCX_MIME =
@@ -6,7 +7,13 @@ const DOCX_MIME =
 /** Lifecycle callbacks main.ts wires into SuperDoc (kept here so the options
  *  builder stays pure and unit-testable without a DOM or SuperDoc instance). */
 export interface SuperdocHandlers {
-  onReady: () => void;
+  /** Fires when SuperDoc is ready; the payload carries the live instance so
+   *  main.ts can reach `superdoc.activeEditor` and `superdoc.navigateTo`. */
+  onReady: (event: { superdoc: SuperDoc }) => void;
+  /** Fires once the underlying editor is created; the cleanest hook for
+   *  capturing the {@link Editor} (used to extract/apply tracked changes and
+   *  to subscribe to the tracked-changes / selection events). */
+  onEditorCreate?: (event: { editor: Editor }) => void;
   onPaginationUpdate: (event: { totalPages: number }) => void;
   onEditorUpdate: () => void;
   onException: (event: { error: unknown }) => void;

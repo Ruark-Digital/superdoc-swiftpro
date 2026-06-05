@@ -1,6 +1,19 @@
-import { SuperDoc } from "@harbour-enterprises/superdoc";
+import { SuperDoc, type Editor } from "@harbour-enterprises/superdoc";
 import "@harbour-enterprises/superdoc/style.css";
-import { parseHostMessage, postToHost, type SuperdocInit } from "./bridge";
+import {
+  buildRedlineClicked,
+  buildRedlines,
+  parseHostCommand,
+  parseHostMessage,
+  postToHost,
+  type SuperdocInit,
+} from "./bridge";
+import {
+  activeRedlineId,
+  applyRedline,
+  extractRedlines,
+  focusRedline,
+} from "./redlines";
 import { buildSuperdocOptions } from "./superdocOptions";
 import "./style.css";
 
@@ -13,6 +26,12 @@ let initialized = false;
 let latestPageCount: number | undefined;
 /** Pending debounce handle for the `doc-edit` ping. */
 let docEditTimer: ReturnType<typeof setTimeout> | undefined;
+/** Live SuperDoc instance, captured on ready (used for `navigateTo`/focus). */
+let superdocInstance: SuperDoc | null = null;
+/** Live editor instance, captured on create (drives tracked-change extraction). */
+let editorInstance: Editor | null = null;
+/** Last tracked-change id we reported as clicked — dedupes selectionUpdate noise. */
+let lastClickedRedlineId: string | null = null;
 
 function reportError(message: string): void {
   postToHost({ type: "superdoc:error", payload: { message } }, HOST_ORIGIN);
@@ -36,6 +55,31 @@ function pingDocEdit(): void {
   }, DOC_EDIT_DEBOUNCE_MS);
 }
 
+/** Re-extract the document's tracked changes and push the full set to the host. */
+function pushRedlines(): void {
+  postToHost(buildRedlines(extractRedlines(editorInstance)), HOST_ORIGIN);
+}
+
+/**
+ * Subscribe to the editor's tracked-change and selection signals once the
+ * editor exists:
+ *  - `tracked-changes-changed` → re-push the redline set to the host.
+ *  - `selectionUpdate` → if the caret moved into a tracked change, tell the
+ *    host which one was "clicked" (deduped so a single click fires once).
+ */
+function wireEditorEvents(editor: Editor): void {
+  editor.on("tracked-changes-changed", () => {
+    pushRedlines();
+  });
+
+  editor.on("selectionUpdate", () => {
+    const id = activeRedlineId(editorInstance);
+    if (id === lastClickedRedlineId) return;
+    lastClickedRedlineId = id;
+    if (id) postToHost(buildRedlineClicked(id), HOST_ORIGIN);
+  });
+}
+
 function handleInit(init: SuperdocInit): void {
   // The host should only init once; ignore duplicates rather than double-mount.
   if (initialized) return;
@@ -51,12 +95,29 @@ function handleInit(init: SuperdocInit): void {
         onPaginationUpdate: ({ totalPages }) => {
           latestPageCount = totalPages;
         },
-        onReady: () => {
+        onEditorCreate: ({ editor }) => {
+          // Capture the editor as soon as it exists and start listening for
+          // tracked-change / selection events (fires before `onReady`).
+          editorInstance = editor;
+          wireEditorEvents(editor);
+        },
+        onReady: ({ superdoc }) => {
+          superdocInstance = superdoc;
+          // Fallback: if `onEditorCreate` did not fire (older runtime paths),
+          // grab the active editor off the ready instance.
+          if (!editorInstance && superdoc.activeEditor) {
+            editorInstance = superdoc.activeEditor;
+            wireEditorEvents(superdoc.activeEditor);
+          }
+
           // Clears the host's "Loading editor…" overlay. Include pageCount only
           // when we actually have a number (the host drops non-numbers).
           const payloadOut =
             typeof latestPageCount === "number" ? { pageCount: latestPageCount } : {};
           postToHost({ type: "superdoc:editor-ready", payload: payloadOut }, HOST_ORIGIN);
+
+          // Push the initial tracked-change set now that the document is loaded.
+          pushRedlines();
         },
         onEditorUpdate: () => {
           pingDocEdit();
@@ -78,6 +139,19 @@ function handleInit(init: SuperdocInit): void {
 window.addEventListener("message", (event) => {
   const init = parseHostMessage(event, HOST_ORIGIN);
   if (init) handleInit(init);
+});
+
+// Inbound redline commands (apply / focus). Validated + origin-checked by
+// `parseHostCommand`; ignored until the editor is ready.
+window.addEventListener("message", (event) => {
+  const cmd = parseHostCommand(event, HOST_ORIGIN);
+  if (!cmd) return;
+  if (cmd.type === "superdoc:apply-redline") {
+    applyRedline(editorInstance, cmd.payload.redlineId, cmd.payload.replacement);
+  } else {
+    // `superdoc:focus-redline` — navigateTo lives on the SuperDoc instance.
+    focusRedline(superdocInstance, cmd.payload.redlineId);
+  }
 });
 
 // Handshake: announce readiness so the host sends us `superdoc:init`. Posted to
