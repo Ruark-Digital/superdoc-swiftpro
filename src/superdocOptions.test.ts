@@ -1,0 +1,44 @@
+import { describe, it, expect, vi } from "vitest";
+import { buildSuperdocOptions, type SuperdocHandlers } from "./superdocOptions";
+import type { SuperdocInit } from "./bridge";
+
+const payload: SuperdocInit["payload"] = {
+  docBytes: new ArrayBuffer(8),
+  fileName: "contract.docx",
+  fileType: "docx",
+  documentMode: "editing",
+  user: { name: "Ada", email: "ada@example.com" },
+  roomId: "room-42:superdoc",
+  wsUrl: "ws://localhost:1234",
+};
+
+const handlers: SuperdocHandlers = {
+  onReady: vi.fn(),
+  onPaginationUpdate: vi.fn(),
+  onEditorUpdate: vi.fn(),
+  onException: vi.fn(),
+  onContentError: vi.fn(),
+};
+
+describe("buildSuperdocOptions", () => {
+  it("renders document-only — NO collaboration module (collab must not gate rendering)", () => {
+    const opts = buildSuperdocOptions(payload, handlers) as Record<string, unknown>;
+    // Regression guard: a collaboration provider would make SuperDoc wait for
+    // WS sync before onReady, hanging the editor when the server is unreachable.
+    expect("modules" in opts).toBe(false);
+  });
+
+  it("builds a .docx Blob document from the transferred bytes", () => {
+    const opts = buildSuperdocOptions(payload, handlers);
+    expect(opts.document).toBeInstanceOf(Blob);
+    expect((opts.document as Blob).type).toContain("wordprocessingml");
+  });
+
+  it("passes documentMode, user, and the lifecycle handlers through", () => {
+    const opts = buildSuperdocOptions(payload, handlers);
+    expect(opts.documentMode).toBe("editing");
+    expect(opts.user).toEqual({ name: "Ada", email: "ada@example.com" });
+    expect(opts.onReady).toBe(handlers.onReady);
+    expect(opts.onContentError).toBe(handlers.onContentError);
+  });
+});

@@ -1,12 +1,10 @@
 import { SuperDoc } from "@harbour-enterprises/superdoc";
 import "@harbour-enterprises/superdoc/style.css";
-import * as Y from "yjs";
-import { WebsocketProvider } from "y-websocket";
 import { parseHostMessage, postToHost, type SuperdocInit } from "./bridge";
+import { buildSuperdocOptions } from "./superdocOptions";
 import "./style.css";
 
 const HOST_ORIGIN = import.meta.env.VITE_HOST_ORIGIN;
-const DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 const DOC_EDIT_DEBOUNCE_MS = 1000;
 
 /** Guards against a second `superdoc:init` re-initializing an already-mounted editor. */
@@ -43,51 +41,34 @@ function handleInit(init: SuperdocInit): void {
   if (initialized) return;
   initialized = true;
 
-  const { payload } = init;
-
   try {
-    // The host already fetched the .docx and transferred the bytes, so we build
-    // the document Blob locally — no network/auth/CORS needed on this side.
-    const blob = new Blob([payload.docBytes], { type: DOCX_MIME });
-
-    // Yjs collaboration against the SAME server SwiftPro uses. roomId is already
-    // namespaced (`…:superdoc`) by the host — passed through verbatim.
-    const ydoc = new Y.Doc();
-    const provider = new WebsocketProvider(payload.wsUrl, payload.roomId, ydoc);
-    provider.on("connection-error", () => {
-      reportError("Collaboration server connection error");
-    });
-
-    new SuperDoc({
-      selector: "#editor",
-      document: blob,
-      documentMode: payload.documentMode,
-      user: payload.user,
-      // Provider-agnostic collaboration: SuperDoc drives any provider exposing
-      // awareness + on/off + synced, which y-websocket's WebsocketProvider does.
-      modules: {
-        collaboration: { ydoc, provider },
-      },
-      onPaginationUpdate: ({ totalPages }) => {
-        latestPageCount = totalPages;
-      },
-      onReady: () => {
-        // Clears the host's "Loading editor…" overlay. Include pageCount only
-        // when we actually have a number (the host drops non-numbers).
-        const payloadOut =
-          typeof latestPageCount === "number" ? { pageCount: latestPageCount } : {};
-        postToHost({ type: "superdoc:editor-ready", payload: payloadOut }, HOST_ORIGIN);
-      },
-      onEditorUpdate: () => {
-        pingDocEdit();
-      },
-      onException: ({ error }) => {
-        reportError(toMessage(error));
-      },
-      onContentError: ({ error }) => {
-        reportError(toMessage(error));
-      },
-    });
+    // Document-only render — no collaboration module (see superdocOptions.ts for
+    // why: collab would gate rendering on an unreachable WS server). The host
+    // already fetched the .docx and transferred the bytes, so no network/auth/
+    // CORS is needed on this side.
+    new SuperDoc(
+      buildSuperdocOptions(init.payload, {
+        onPaginationUpdate: ({ totalPages }) => {
+          latestPageCount = totalPages;
+        },
+        onReady: () => {
+          // Clears the host's "Loading editor…" overlay. Include pageCount only
+          // when we actually have a number (the host drops non-numbers).
+          const payloadOut =
+            typeof latestPageCount === "number" ? { pageCount: latestPageCount } : {};
+          postToHost({ type: "superdoc:editor-ready", payload: payloadOut }, HOST_ORIGIN);
+        },
+        onEditorUpdate: () => {
+          pingDocEdit();
+        },
+        onException: ({ error }) => {
+          reportError(toMessage(error));
+        },
+        onContentError: ({ error }) => {
+          reportError(toMessage(error));
+        },
+      }),
+    );
   } catch (err) {
     reportError(toMessage(err));
   }
