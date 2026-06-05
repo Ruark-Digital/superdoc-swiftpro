@@ -1,0 +1,25 @@
+{
+  "name": "superdoc-swiftpro",
+  "private": true,
+  "version": "0.1.0",
+  "license": "AGPL-3.0-or-later",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "typescript": "~6.0.2",
+    "vite": "^8.0.12",
+    "vitest": "^4.1.8"
+  },
+  "dependencies": {
+    "@harbour-enterprises/superdoc": "1.38.0",
+    "y-websocket": "^3.0.0",
+    "yjs": "^13.6.31"
+  }
+}

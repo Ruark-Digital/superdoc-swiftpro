@@ -1,0 +1,27 @@
+/*
+ * This app is always rendered inside SwiftPro's <iframe>, so it owns the full
+ * viewport. We give the SuperDoc mount point the entire height and let SuperDoc
+ * paint its own document chrome on top of a neutral editor backdrop.
+ */
+:root {
+  --editor-backdrop: #f5f6f8;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  background: var(--editor-backdrop);
+  font-family:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#editor {
+  height: 100vh;
+  overflow: auto;
+}
