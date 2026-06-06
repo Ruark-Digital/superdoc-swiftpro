@@ -33,12 +33,14 @@ export interface SuperdocInitPayload {
   documentMode: DocumentMode;
   user: { name: string; email: string };
   /**
-   * y-websocket room. ⚠️ ALREADY namespaced by the host as `<baseRoom>:superdoc`
-   * — use verbatim. Do NOT append or strip `:superdoc`.
+   * y-websocket room. ⚠️ ALREADY namespaced by the host as `<baseRoom>-superdoc`
+   * — use verbatim. Do NOT append or strip the suffix.
    */
   roomId: string;
-  /** WebSocket URL of the shared Yjs collab server (e.g. ws://host:1234). */
+  /** WebSocket URL of the shared Yjs collab server (e.g. wss://api.swiftpro.tech/api/v1/dev/contract). */
   wsUrl: string;
+  /** JWT for the WS handshake — sent via the `Sec-WebSocket-Protocol` subprotocol. */
+  token: string;
 }
 
 /** The one message the host → this app. */
@@ -90,6 +92,7 @@ export function parseHostMessage(event: MessageEvent, hostOrigin: string): Super
   if (typeof payload.fileType !== "string") return null;
   if (typeof payload.roomId !== "string" || payload.roomId.length === 0) return null;
   if (typeof payload.wsUrl !== "string" || payload.wsUrl.length === 0) return null;
+  if (typeof payload.token !== "string" || payload.token.length === 0) return null;
   if (!isUser(payload.user)) return null;
 
   // documentMode defaults to "editing" if absent/invalid (per the host contract).
@@ -107,6 +110,7 @@ export function parseHostMessage(event: MessageEvent, hostOrigin: string): Super
       user: payload.user,
       roomId: payload.roomId,
       wsUrl: payload.wsUrl,
+      token: payload.token,
     },
   };
 }

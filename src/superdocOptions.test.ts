@@ -10,6 +10,7 @@ const payload: SuperdocInit["payload"] = {
   user: { name: "Ada", email: "ada@example.com" },
   roomId: "room-42:superdoc",
   wsUrl: "ws://localhost:1234",
+  token: "t",
 };
 
 const handlers: SuperdocHandlers = {

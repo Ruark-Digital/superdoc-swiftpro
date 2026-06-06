@@ -20,6 +20,7 @@ function validInitData(overrides: Record<string, unknown> = {}) {
       user: { name: "Ada", email: "ada@example.com" },
       roomId: "room-42:superdoc",
       wsUrl: "ws://localhost:1234",
+      token: "t",
       ...overrides,
     },
   };
@@ -133,5 +134,33 @@ describe("postToHost", () => {
       { type: "superdoc:editor-ready", payload: { pageCount: 3 } },
       HOST,
     );
+  });
+});
+
+describe("parseHostMessage token", () => {
+  const hostOrigin = "https://app.swiftpro.tech";
+  const validData = {
+    type: "superdoc:init",
+    payload: {
+      docBytes: new ArrayBuffer(8),
+      fileName: "a.docx",
+      fileType: "docx",
+      documentMode: "editing",
+      user: { name: "A", email: "a@b.c" },
+      roomId: "room123-superdoc",
+      wsUrl: "wss://api.swiftpro.tech/api/v1/dev/contract",
+      token: "jwt-abc",
+    },
+  };
+
+  it("returns the token when present", () => {
+    const ev = { origin: hostOrigin, data: validData } as MessageEvent;
+    expect(parseHostMessage(ev, hostOrigin)?.payload.token).toBe("jwt-abc");
+  });
+
+  it("rejects when token is missing", () => {
+    const { token: _omit, ...noToken } = validData.payload;
+    const ev = { origin: hostOrigin, data: { type: "superdoc:init", payload: noToken } } as MessageEvent;
+    expect(parseHostMessage(ev, hostOrigin)).toBeNull();
   });
 });
