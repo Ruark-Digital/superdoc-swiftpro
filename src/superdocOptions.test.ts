@@ -54,7 +54,7 @@ describe("buildSuperdocOptions collaboration", () => {
   it("adds modules.collaboration when a synced handle is given", () => {
     const doc = new Y.Doc();
     const provider = {} as never;
-    const opts = buildSuperdocOptions(payload, handlers, { doc, provider }) as {
+    const opts = buildSuperdocOptions(payload, handlers, { doc, provider, isNewRoom: false }) as {
       modules?: { collaboration?: { ydoc: unknown; provider: unknown } };
     };
     expect(opts.modules?.collaboration?.ydoc).toBe(doc);

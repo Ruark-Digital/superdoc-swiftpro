@@ -90,14 +90,21 @@ async function handleInit(init: SuperdocInit): Promise<void> {
   initialized = true;
 
   try {
-    // Connect-or-fallback: try to sync a provider first; only attach
-    // collaboration to SuperDoc once synced, else render document-only.
+    // Connect-or-fallback: sync a provider first (or null if unreachable).
     const collab = await connectWithTimeout({
       wsUrl: init.payload.wsUrl,
       roomId: init.payload.roomId,
       token: init.payload.token,
       timeoutMs: COLLAB_SYNC_TIMEOUT_MS,
     });
+
+    // Seed vs join (see CollabHandle.isNewRoom):
+    //  • Empty room  → render document-only from the bytes, then SEED the room
+    //    via `upgradeToCollaboration` in onReady (below). Construction-time
+    //    collaboration would just JOIN the empty room and render nothing.
+    //  • Populated room → attach collaboration now to JOIN the shared state.
+    //  • No sync → document-only fallback.
+    const joinExisting = collab !== null && !collab.isNewRoom;
 
     new SuperDoc(
       buildSuperdocOptions(init.payload, {
@@ -127,6 +134,23 @@ async function handleInit(init: SuperdocInit): Promise<void> {
 
           // Push the initial tracked-change set now that the document is loaded.
           pushRedlines();
+
+          // New (empty) room: now that the document is rendered, promote it into
+          // collaboration — this authoritatively seeds the room from the docx we
+          // just loaded and attaches the live provider in place. Runs AFTER
+          // editor-ready so the document is already visible; collab attaches in
+          // the background. On failure we stay document-only (don't surface an
+          // error — the document is fine).
+          if (collab && collab.isNewRoom) {
+            void superdoc
+              .upgradeToCollaboration({ ydoc: collab.doc, provider: collab.provider })
+              .catch((error) => {
+                if (import.meta.env.DEV) {
+                  // eslint-disable-next-line no-console
+                  console.warn("[collab] upgradeToCollaboration failed; staying document-only", error);
+                }
+              });
+          }
         },
         onEditorUpdate: () => {
           pingDocEdit();
@@ -137,7 +161,7 @@ async function handleInit(init: SuperdocInit): Promise<void> {
         onContentError: ({ error }) => {
           reportError(toMessage(error));
         },
-      }, collab),
+      }, joinExisting ? collab : null),
     );
   } catch (err) {
     reportError(toMessage(err));
