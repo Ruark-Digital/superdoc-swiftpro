@@ -1,5 +1,6 @@
 import type { Editor, SuperDoc } from "@harbour-enterprises/superdoc";
 import type { SuperdocInit } from "./bridge";
+import type { CollabHandle } from "./collabProvider";
 
 const DOCX_MIME =
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
@@ -23,21 +24,16 @@ export interface SuperdocHandlers {
 /**
  * Build the SuperDoc constructor options for an init payload.
  *
- * IMPORTANT — there is intentionally **no `modules.collaboration`**. SuperDoc
- * gates `onReady` on the collaboration provider syncing (its internal
- * `CollaborationReady` step), so attaching a provider to an unreachable
- * WebSocket server hangs the editor forever — the document never renders. For
- * the MVP we therefore render **document-only** (local editing) from the bytes
- * the host transferred.
- *
- * `payload.roomId` / `payload.wsUrl` are still received (the bridge contract is
- * unchanged) and reserved for re-enabling collaboration once the backend collab
- * server is confirmed reachable — and then via a *connect-or-fallback* so a
- * down server still renders. See BUILD-PLAN.md.
+ * When `collab` is provided it is an **already-synced** Yjs handle (see
+ * connectWithTimeout) — only then do we attach `modules.collaboration`, so
+ * SuperDoc's `onReady` (which gates on collab sync) fires immediately. When
+ * `collab` is `null`/absent we render **document-only** from the transferred
+ * bytes (graceful fallback for an unreachable server).
  */
 export function buildSuperdocOptions(
   payload: SuperdocInit["payload"],
   handlers: SuperdocHandlers,
+  collab?: CollabHandle | null,
 ) {
   return {
     selector: "#editor",
@@ -45,6 +41,7 @@ export function buildSuperdocOptions(
     document: new Blob([payload.docBytes], { type: DOCX_MIME }),
     documentMode: payload.documentMode,
     user: payload.user,
+    ...(collab ? { modules: { collaboration: { ydoc: collab.doc, provider: collab.provider } } } : {}),
     ...handlers,
   };
 }

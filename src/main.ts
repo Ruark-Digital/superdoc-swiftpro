@@ -15,11 +15,14 @@ import {
   focusRedline,
 } from "./redlines";
 import { buildSuperdocOptions } from "./superdocOptions";
+import { connectWithTimeout } from "./collabProvider";
 import { resolveHostOrigin } from "./env";
 import "./style.css";
 
 const HOST_ORIGIN = resolveHostOrigin(import.meta.env);
 const DOC_EDIT_DEBOUNCE_MS = 1000;
+/** Max wait for the collab server to sync before falling back to document-only. */
+const COLLAB_SYNC_TIMEOUT_MS = 9000;
 
 /** Guards against a second `superdoc:init` re-initializing an already-mounted editor. */
 let initialized = false;
@@ -81,16 +84,21 @@ function wireEditorEvents(editor: Editor): void {
   });
 }
 
-function handleInit(init: SuperdocInit): void {
+async function handleInit(init: SuperdocInit): Promise<void> {
   // The host should only init once; ignore duplicates rather than double-mount.
   if (initialized) return;
   initialized = true;
 
   try {
-    // Document-only render — no collaboration module (see superdocOptions.ts for
-    // why: collab would gate rendering on an unreachable WS server). The host
-    // already fetched the .docx and transferred the bytes, so no network/auth/
-    // CORS is needed on this side.
+    // Connect-or-fallback: try to sync a provider first; only attach
+    // collaboration to SuperDoc once synced, else render document-only.
+    const collab = await connectWithTimeout({
+      wsUrl: init.payload.wsUrl,
+      roomId: init.payload.roomId,
+      token: init.payload.token,
+      timeoutMs: COLLAB_SYNC_TIMEOUT_MS,
+    });
+
     new SuperDoc(
       buildSuperdocOptions(init.payload, {
         onPaginationUpdate: ({ totalPages }) => {
@@ -129,7 +137,7 @@ function handleInit(init: SuperdocInit): void {
         onContentError: ({ error }) => {
           reportError(toMessage(error));
         },
-      }),
+      }, collab),
     );
   } catch (err) {
     reportError(toMessage(err));
@@ -139,7 +147,7 @@ function handleInit(init: SuperdocInit): void {
 // Inbound: only ever act on a validated init from the trusted host origin.
 window.addEventListener("message", (event) => {
   const init = parseHostMessage(event, HOST_ORIGIN);
-  if (init) handleInit(init);
+  if (init) void handleInit(init);
 });
 
 // Inbound redline commands (apply / focus). Validated + origin-checked by

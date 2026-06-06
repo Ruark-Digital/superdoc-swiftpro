@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+import * as Y from "yjs";
 import { buildSuperdocOptions, type SuperdocHandlers } from "./superdocOptions";
 import type { SuperdocInit } from "./bridge";
 
@@ -41,5 +42,22 @@ describe("buildSuperdocOptions", () => {
     expect(opts.user).toEqual({ name: "Ada", email: "ada@example.com" });
     expect(opts.onReady).toBe(handlers.onReady);
     expect(opts.onContentError).toBe(handlers.onContentError);
+  });
+});
+
+describe("buildSuperdocOptions collaboration", () => {
+  it("omits modules.collaboration when no collab handle is given", () => {
+    const opts = buildSuperdocOptions(payload, handlers) as Record<string, unknown>;
+    expect(opts.modules).toBeUndefined();
+  });
+
+  it("adds modules.collaboration when a synced handle is given", () => {
+    const doc = new Y.Doc();
+    const provider = {} as never;
+    const opts = buildSuperdocOptions(payload, handlers, { doc, provider }) as {
+      modules?: { collaboration?: { ydoc: unknown; provider: unknown } };
+    };
+    expect(opts.modules?.collaboration?.ydoc).toBe(doc);
+    expect(opts.modules?.collaboration?.provider).toBe(provider);
   });
 });
