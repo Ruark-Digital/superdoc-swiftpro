@@ -91,3 +91,15 @@ pnpm build        # tsc + vite build → dist/
 Build with `pnpm build` and serve `dist/` from this app's own origin (a dedicated
 subdomain). Set `VITE_HOST_ORIGIN` to the deployed SwiftPro origin, and point
 SwiftPro's `VITE_SUPERDOC_APP_URL` at this app's deployed URL.
+
+## Production deploy (AWS Amplify)
+
+1. Create a new Amplify app pointed at this repo/branch; build spec is `amplify.yml`.
+2. Set the env var `VITE_HOST_ORIGIN` to the host origin (e.g. `https://app.swiftpro.tech`).
+   A missing value in a production build fails the app loudly at startup.
+3. Response headers (incl. `Content-Security-Policy: frame-ancestors <host>`) come
+   from `customHttp.yml` — update the host origin there to match.
+4. On the host (swifter), set `VITE_SUPERDOC_APP_URL` to this app's origin
+   (e.g. `https://editor.swiftpro.tech`). The two values are a matched pair.
+5. Replace the `ORG` placeholder in the `index.html` AGPL source link with the
+   real public repository URL.
