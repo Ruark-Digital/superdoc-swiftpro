@@ -1,0 +1,20 @@
+# AWS Amplify custom response headers.
+# The editor is AGPL code served in a cross-origin iframe. Only the SwiftPro
+# host may frame it. `frame-ancestors` can ONLY be set via HTTP header (not a
+# <meta> tag), which is why this file exists.
+#
+# CSP is intentionally directive-light: it sets ONLY `frame-ancestors`. With no
+# `default-src`, `connect-src` falls back to "allow", so this editor's Yjs
+# WebSocket (wss://api.swiftpro.tech, opened from inside the iframe) is NOT
+# blocked. ⚠️ If you ever add `default-src` here, you MUST also add
+# `connect-src 'self' https://api.swiftpro.tech wss://api.swiftpro.tech;`
+# (and whatever else SuperDoc fetches) or the collab WS will silently break.
+customHeaders:
+  - pattern: '**'
+    headers:
+      - key: 'Content-Security-Policy'
+        value: "frame-ancestors https://app.swiftpro.tech;"
+      - key: 'X-Content-Type-Options'
+        value: 'nosniff'
+      - key: 'Referrer-Policy'
+        value: 'strict-origin-when-cross-origin'

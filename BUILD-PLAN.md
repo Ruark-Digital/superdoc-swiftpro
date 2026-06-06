@@ -12,9 +12,43 @@
 - The **host side is already built and merged-ready** in `swifter` on branch
   `feat-collab-superdoc-editor`. It renders this app's iframe when the
   CollaborationToolPage URL has `?editor=superdoc`.
-- **This repo is empty.** Your job: build the SuperDoc app that satisfies the
-  postMessage contract below, connect it to the same Yjs collab server, and
-  deploy it to its own origin.
+- **BUILT.** This repo now contains the working app (`src/main.ts`,
+  `src/bridge.ts`, `src/superdocOptions.ts`). It boots, completes the handshake,
+  and renders `.docx` documents end-to-end against the SwiftPro host. Remaining:
+  deploy to its own origin + (later) re-enable live collaboration.
+
+## Verified learnings & current state (260605)
+
+**Proven end-to-end** (Playwright drove SwiftPro `?editor=superdoc` against this
+app on `:5174`): handshake `superdoc:ready` → host `superdoc:init` → SuperDoc
+1.38.0 boots in the iframe → document renders (8.3k chars of real `.docx`
+content) → `superdoc:editor-ready` clears the host overlay. AGPL isolation,
+origin checks, sandbox, transferable doc-bytes, and roomId-verbatim all confirmed
+working.
+
+**⚠️ Critical discovery — collaboration must NOT gate rendering.** SuperDoc gates
+`onReady` on its collaboration provider syncing (internal `CollaborationReady`
+step). If you pass `modules.collaboration: { ydoc, provider }` and the WebSocket
+server is unreachable, the provider never syncs → `onReady` never fires → **the
+editor hangs forever / never renders**. The first build did exactly this and a
+collab-server 502 produced a blank "Could not load the editor." The host bridge
+was fine; the hang was here.
+
+**Current decision (MVP): document-only.** `src/superdocOptions.ts` builds the
+SuperDoc options with **no `modules.collaboration`** — the doc renders locally
+from the transferred bytes, no WS dependency. `payload.roomId` / `payload.wsUrl`
+are still received (contract unchanged) but unused, reserved for re-enabling
+collab. Locked by a regression test (`src/superdocOptions.test.ts`:
+"NO collaboration module").
+
+**To re-enable live collaboration later (connect-or-fallback):** attempt the
+`WebsocketProvider` connection with a short timeout; only if it *syncs*, construct
+SuperDoc WITH `modules.collaboration`; otherwise fall back to the document-only
+options so a down/unreachable server still renders. Never attach a provider you
+haven't confirmed connected. Separately, the backend collab endpoint
+(`wss://api.swiftpro.tech/api/v1/dev/contract`) returned **502** for a room
+passed as a path segment containing `:`/`.docx` — fix/confirm that before
+collab can work at all.
 
 ## Why this exists (context)
 
