@@ -15,9 +15,10 @@ import {
   focusRedline,
 } from "./redlines";
 import { buildSuperdocOptions } from "./superdocOptions";
+import { resolveHostOrigin } from "./env";
 import "./style.css";
 
-const HOST_ORIGIN = import.meta.env.VITE_HOST_ORIGIN;
+const HOST_ORIGIN = resolveHostOrigin(import.meta.env);
 const DOC_EDIT_DEBOUNCE_MS = 1000;
 
 /** Guards against a second `superdoc:init` re-initializing an already-mounted editor. */
