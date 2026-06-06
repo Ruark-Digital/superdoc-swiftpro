@@ -16,10 +16,19 @@ import {
 } from "./redlines";
 import { buildSuperdocOptions } from "./superdocOptions";
 import { connectWithTimeout } from "./collabProvider";
-import { resolveHostOrigin } from "./env";
+import { resolveHostOrigins } from "./env";
 import "./style.css";
 
-const HOST_ORIGIN = resolveHostOrigin(import.meta.env);
+// Allowlist of host origins permitted to embed/drive this editor (one editor
+// deployment may serve several host environments).
+const HOST_ORIGINS = resolveHostOrigins(import.meta.env);
+/** The host origin confirmed to be embedding us — captured from the first valid
+ *  inbound message. All outbound messages target exactly this origin. */
+let trustedHostOrigin: string | null = null;
+/** Outbound target: the confirmed parent once known, else the first allowlisted
+ *  origin (only the contentless `ready` is sent before the handshake completes,
+ *  and that one is broadcast to every allowlisted origin). */
+const hostTarget = (): string => trustedHostOrigin ?? HOST_ORIGINS[0];
 const DOC_EDIT_DEBOUNCE_MS = 1000;
 /** Max wait for the collab server to sync before falling back to document-only. */
 const COLLAB_SYNC_TIMEOUT_MS = 9000;
@@ -38,7 +47,7 @@ let editorInstance: Editor | null = null;
 let lastClickedRedlineId: string | null = null;
 
 function reportError(message: string): void {
-  postToHost({ type: "superdoc:error", payload: { message } }, HOST_ORIGIN);
+  postToHost({ type: "superdoc:error", payload: { message } }, hostTarget());
 }
 
 function toMessage(err: unknown): string {
@@ -55,13 +64,13 @@ function toMessage(err: unknown): string {
 function pingDocEdit(): void {
   if (docEditTimer !== undefined) clearTimeout(docEditTimer);
   docEditTimer = setTimeout(() => {
-    postToHost({ type: "superdoc:doc-edit" }, HOST_ORIGIN);
+    postToHost({ type: "superdoc:doc-edit" }, hostTarget());
   }, DOC_EDIT_DEBOUNCE_MS);
 }
 
 /** Re-extract the document's tracked changes and push the full set to the host. */
 function pushRedlines(): void {
-  postToHost(buildRedlines(extractRedlines(editorInstance)), HOST_ORIGIN);
+  postToHost(buildRedlines(extractRedlines(editorInstance)), hostTarget());
 }
 
 /**
@@ -80,7 +89,7 @@ function wireEditorEvents(editor: Editor): void {
     const id = activeRedlineId(editorInstance);
     if (id === lastClickedRedlineId) return;
     lastClickedRedlineId = id;
-    if (id) postToHost(buildRedlineClicked(id), HOST_ORIGIN);
+    if (id) postToHost(buildRedlineClicked(id), hostTarget());
   });
 }
 
@@ -90,14 +99,21 @@ async function handleInit(init: SuperdocInit): Promise<void> {
   initialized = true;
 
   try {
-    // Connect-or-fallback: try to sync a provider first; only attach
-    // collaboration to SuperDoc once synced, else render document-only.
+    // Connect-or-fallback: sync a provider first (or null if unreachable).
     const collab = await connectWithTimeout({
       wsUrl: init.payload.wsUrl,
       roomId: init.payload.roomId,
       token: init.payload.token,
       timeoutMs: COLLAB_SYNC_TIMEOUT_MS,
     });
+
+    // Seed vs join (see CollabHandle.isNewRoom):
+    //  • Empty room  → render document-only from the bytes, then SEED the room
+    //    via `upgradeToCollaboration` in onReady (below). Construction-time
+    //    collaboration would just JOIN the empty room and render nothing.
+    //  • Populated room → attach collaboration now to JOIN the shared state.
+    //  • No sync → document-only fallback.
+    const joinExisting = collab !== null && !collab.isNewRoom;
 
     new SuperDoc(
       buildSuperdocOptions(init.payload, {
@@ -123,10 +139,27 @@ async function handleInit(init: SuperdocInit): Promise<void> {
           // when we actually have a number (the host drops non-numbers).
           const payloadOut =
             typeof latestPageCount === "number" ? { pageCount: latestPageCount } : {};
-          postToHost({ type: "superdoc:editor-ready", payload: payloadOut }, HOST_ORIGIN);
+          postToHost({ type: "superdoc:editor-ready", payload: payloadOut }, hostTarget());
 
           // Push the initial tracked-change set now that the document is loaded.
           pushRedlines();
+
+          // New (empty) room: now that the document is rendered, promote it into
+          // collaboration — this authoritatively seeds the room from the docx we
+          // just loaded and attaches the live provider in place. Runs AFTER
+          // editor-ready so the document is already visible; collab attaches in
+          // the background. On failure we stay document-only (don't surface an
+          // error — the document is fine).
+          if (collab && collab.isNewRoom) {
+            void superdoc
+              .upgradeToCollaboration({ ydoc: collab.doc, provider: collab.provider })
+              .catch((error) => {
+                if (import.meta.env.DEV) {
+                  // eslint-disable-next-line no-console
+                  console.warn("[collab] upgradeToCollaboration failed; staying document-only", error);
+                }
+              });
+          }
         },
         onEditorUpdate: () => {
           pingDocEdit();
@@ -137,7 +170,7 @@ async function handleInit(init: SuperdocInit): Promise<void> {
         onContentError: ({ error }) => {
           reportError(toMessage(error));
         },
-      }, collab),
+      }, joinExisting ? collab : null),
     );
   } catch (err) {
     reportError(toMessage(err));
@@ -146,14 +179,18 @@ async function handleInit(init: SuperdocInit): Promise<void> {
 
 // Inbound: only ever act on a validated init from the trusted host origin.
 window.addEventListener("message", (event) => {
-  const init = parseHostMessage(event, HOST_ORIGIN);
-  if (init) void handleInit(init);
+  const init = parseHostMessage(event, HOST_ORIGINS);
+  if (init) {
+    // Lock onto the origin that actually framed us; reply only to it from here.
+    trustedHostOrigin = event.origin;
+    void handleInit(init);
+  }
 });
 
 // Inbound redline commands (apply / focus). Validated + origin-checked by
 // `parseHostCommand`; ignored until the editor is ready.
 window.addEventListener("message", (event) => {
-  const cmd = parseHostCommand(event, HOST_ORIGIN);
+  const cmd = parseHostCommand(event, HOST_ORIGINS);
   if (!cmd) return;
   if (cmd.type === "superdoc:apply-redline") {
     applyRedline(editorInstance, cmd.payload.redlineId, cmd.payload.replacement);
@@ -163,6 +200,9 @@ window.addEventListener("message", (event) => {
   }
 });
 
-// Handshake: announce readiness so the host sends us `superdoc:init`. Posted to
-// the known host origin (never "*") — we have it from env.
-postToHost({ type: "superdoc:ready" }, HOST_ORIGIN);
+// Handshake: announce readiness so the host sends us `superdoc:init`. We don't
+// yet know WHICH allowlisted host is embedding us, so post the (contentless)
+// ready to each candidate origin — the browser delivers it only to the matching
+// parent and silently drops the rest. Never "*". Once the host replies with
+// `superdoc:init`, we lock onto its origin for all further messages.
+HOST_ORIGINS.forEach((origin) => postToHost({ type: "superdoc:ready" }, origin));
