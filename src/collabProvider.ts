@@ -14,6 +14,14 @@ export interface CollabConnectConfig {
 export interface CollabHandle {
   doc: Y.Doc;
   provider: WebsocketProvider;
+  /**
+   * True when the synced room had no content (no shared Yjs types) — i.e. this
+   * client is the first to open it. The caller must SEED the room from the
+   * document (SuperDoc `upgradeToCollaboration`). When false, the room already
+   * has content and the caller should JOIN it (construction-time collaboration)
+   * rather than seed, to avoid clobbering other users' live edits.
+   */
+  isNewRoom: boolean;
 }
 
 /** Minimal provider shape we depend on (lets tests inject a fake). */
@@ -56,7 +64,10 @@ export function connectWithTimeout(
       settled = true;
       clearTimeout(timer);
       if (synced) {
-        resolve({ doc, provider: provider as unknown as WebsocketProvider });
+        // After the initial sync, an unseeded room has no shared types yet;
+        // a populated room has the fragment/maps the server delivered.
+        const isNewRoom = doc.share.size === 0;
+        resolve({ doc, provider: provider as unknown as WebsocketProvider, isNewRoom });
       } else {
         provider.destroy();
         doc.destroy();
