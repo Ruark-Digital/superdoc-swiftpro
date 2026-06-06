@@ -46,4 +46,18 @@ describe("connectWithTimeout", () => {
     expect(handle).toBeNull();
     expect(provider.destroy).toHaveBeenCalled();
   });
+
+  it("resolves null and destroys on connection-close before timeout", async () => {
+    vi.useFakeTimers();
+    const provider = fakeProvider({ syncAfterMs: null });
+    const promise = connectWithTimeout(
+      { wsUrl: "wss://x/y", roomId: "r-superdoc", token: "t", timeoutMs: 10000 },
+      { createProvider: () => provider as never },
+    );
+    await vi.advanceTimersByTimeAsync(50);
+    provider._emit("connection-close", true);
+    const handle = await promise;
+    expect(handle).toBeNull();
+    expect(provider.destroy).toHaveBeenCalled();
+  });
 });

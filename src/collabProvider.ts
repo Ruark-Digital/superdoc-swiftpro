@@ -68,5 +68,6 @@ export function connectWithTimeout(
       if (isSynced) finish(true);
     });
     provider.on("connection-error", () => finish(false));
+    provider.on("connection-close", () => finish(false));
   });
 }
