@@ -24,10 +24,17 @@ const handlers: SuperdocHandlers = {
 
 describe("buildSuperdocOptions", () => {
   it("renders document-only — NO collaboration module (collab must not gate rendering)", () => {
-    const opts = buildSuperdocOptions(payload, handlers) as Record<string, unknown>;
+    const opts = buildSuperdocOptions(payload, handlers) as { modules?: { collaboration?: unknown } };
     // Regression guard: a collaboration provider would make SuperDoc wait for
     // WS sync before onReady, hanging the editor when the server is unreachable.
-    expect("modules" in opts).toBe(false);
+    expect(opts.modules?.collaboration).toBeUndefined();
+  });
+
+  it("hides the documentMode toolbar item via excludeItems", () => {
+    const opts = buildSuperdocOptions(payload, handlers) as {
+      modules?: { toolbar?: { excludeItems?: string[] } };
+    };
+    expect(opts.modules?.toolbar?.excludeItems).toContain("documentMode");
   });
 
   it("builds a .docx Blob document from the transferred bytes", () => {
@@ -47,8 +54,8 @@ describe("buildSuperdocOptions", () => {
 
 describe("buildSuperdocOptions collaboration", () => {
   it("omits modules.collaboration when no collab handle is given", () => {
-    const opts = buildSuperdocOptions(payload, handlers) as Record<string, unknown>;
-    expect(opts.modules).toBeUndefined();
+    const opts = buildSuperdocOptions(payload, handlers) as { modules?: { collaboration?: unknown } };
+    expect(opts.modules?.collaboration).toBeUndefined();
   });
 
   it("adds modules.collaboration when a synced handle is given", () => {
