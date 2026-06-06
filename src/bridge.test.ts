@@ -38,6 +38,25 @@ describe("parseHostMessage — origin check", () => {
   });
 });
 
+describe("parseHostMessage — origin allowlist", () => {
+  const allow = ["https://swiftpro.tech", "https://bug.swiftpro.tech"];
+
+  it("accepts any origin in the allowlist", () => {
+    expect(parseHostMessage(msg("https://bug.swiftpro.tech", validInitData()), allow)?.type).toBe("superdoc:init");
+    expect(parseHostMessage(msg("https://swiftpro.tech", validInitData()), allow)?.type).toBe("superdoc:init");
+  });
+
+  it("rejects an origin not in the allowlist", () => {
+    expect(parseHostMessage(msg(EVIL, validInitData()), allow)).toBeNull();
+  });
+
+  it("parseHostCommand honors the allowlist too", () => {
+    const cmd = { type: "superdoc:focus-redline", payload: { redlineId: "r1" } };
+    expect(parseHostCommand(msg("https://bug.swiftpro.tech", cmd), allow)).not.toBeNull();
+    expect(parseHostCommand(msg(EVIL, cmd), allow)).toBeNull();
+  });
+});
+
 describe("parseHostMessage — shape validation", () => {
   it("rejects a wrong message type", () => {
     expect(parseHostMessage(msg(HOST, { type: "something-else" }), HOST)).toBeNull();
