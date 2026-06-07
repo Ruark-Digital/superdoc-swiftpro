@@ -16,7 +16,7 @@ import {
 } from "./redlines";
 import { buildSuperdocOptions } from "./superdocOptions";
 import { connectWithTimeout } from "./collabProvider";
-import { resolveHostOrigins } from "./env";
+import { pickReadyTargets, resolveHostOrigins } from "./env";
 import "./style.css";
 
 // Allowlist of host origins permitted to embed/drive this editor (one editor
@@ -200,9 +200,11 @@ window.addEventListener("message", (event) => {
   }
 });
 
-// Handshake: announce readiness so the host sends us `superdoc:init`. We don't
-// yet know WHICH allowlisted host is embedding us, so post the (contentless)
-// ready to each candidate origin — the browser delivers it only to the matching
-// parent and silently drops the rest. Never "*". Once the host replies with
-// `superdoc:init`, we lock onto its origin for all further messages.
-HOST_ORIGINS.forEach((origin) => postToHost({ type: "superdoc:ready" }, origin));
+// Handshake: announce readiness so the host sends us `superdoc:init`. Target the
+// actual embedding parent (from referrer) when we can — exactly one origin, no
+// cross-origin postMessage warnings — else broadcast to the whole allowlist (the
+// browser delivers only to the matching parent, drops the rest). Never "*". Once
+// the host replies with `superdoc:init`, we lock onto its origin for all messages.
+pickReadyTargets(document.referrer, HOST_ORIGINS).forEach((origin) =>
+  postToHost({ type: "superdoc:ready" }, origin),
+);

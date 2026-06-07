@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveHostOrigins } from "./env";
+import { pickReadyTargets, resolveHostOrigins } from "./env";
 
 describe("resolveHostOrigins", () => {
   it("returns a single normalized origin when one is set", () => {
@@ -40,5 +40,22 @@ describe("resolveHostOrigins", () => {
   it("throws in a production build when unset", () => {
     expect(() => resolveHostOrigins({ VITE_HOST_ORIGIN: undefined, PROD: true }))
       .toThrow(/VITE_HOST_ORIGIN/);
+  });
+});
+
+describe("pickReadyTargets", () => {
+  const allow = ["https://swiftpro.tech", "https://staging.swiftpro.tech", "https://bug.swiftpro.tech"];
+
+  it("targets only the parent origin from the referrer when it is allowlisted", () => {
+    expect(pickReadyTargets("https://staging.swiftpro.tech/collaboration-tool?x=1", allow))
+      .toEqual(["https://staging.swiftpro.tech"]);
+  });
+
+  it("broadcasts to the whole allowlist when the referrer is empty", () => {
+    expect(pickReadyTargets("", allow)).toEqual(allow);
+  });
+
+  it("broadcasts when the referrer origin is not allowlisted", () => {
+    expect(pickReadyTargets("https://evil.example.com/", allow)).toEqual(allow);
   });
 });
