@@ -40,3 +40,23 @@ export function resolveHostOrigins(
   }
   return [DEV_HOST_ORIGIN];
 }
+
+/**
+ * Choose which origin(s) to post the initial (contentless) `superdoc:ready` to.
+ *
+ * We don't yet know which allowlisted host is embedding us. Prefer the ACTUAL
+ * parent origin derived from `document.referrer` (it's in the allowlist) so we
+ * post to exactly one origin — no cross-origin "target origin does not match"
+ * console warnings. If the referrer is missing/blocked or not allowlisted, fall
+ * back to broadcasting to the whole allowlist (the browser delivers only to the
+ * matching parent and drops the rest).
+ */
+export function pickReadyTargets(referrer: string, hostOrigins: string[]): string[] {
+  try {
+    const parent = referrer ? new URL(referrer).origin : "";
+    if (parent && hostOrigins.includes(parent)) return [parent];
+  } catch {
+    // unparseable referrer — fall through to broadcast
+  }
+  return hostOrigins;
+}
