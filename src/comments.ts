@@ -75,16 +75,32 @@ export function createAnchoredComment(
 ): string | null {
   const doc = getDoc(editor);
   if (!doc?.comments || typeof text !== "string" || text.length === 0 || target == null) {
+    if (import.meta.env.DEV) {
+      // eslint-disable-next-line no-console
+      console.warn("[anchored-comment] precondition failed", {
+        hasCommentsApi: Boolean(doc?.comments),
+        hasText: typeof text === "string" && text.length > 0,
+        hasTarget: target != null,
+      });
+    }
     return null;
   }
   try {
     const receipt = doc.comments.create({ text, target });
+    if (import.meta.env.DEV) {
+      // eslint-disable-next-line no-console
+      console.log("[anchored-comment] create receipt", receipt);
+    }
     const id =
       receipt && typeof receipt === "object"
         ? (receipt as { id?: unknown }).id
         : null;
     return typeof id === "string" && id.length > 0 ? id : null;
-  } catch {
+  } catch (error) {
+    if (import.meta.env.DEV) {
+      // eslint-disable-next-line no-console
+      console.warn("[anchored-comment] create threw", error);
+    }
     return null;
   }
 }

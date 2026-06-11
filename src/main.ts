@@ -281,6 +281,14 @@ window.addEventListener("message", (event) => {
       const commentId = lastSelection
         ? createAnchoredComment(editorInstance, cmd.payload.text, lastSelection.target)
         : null;
+      if (import.meta.env.DEV) {
+        // eslint-disable-next-line no-console
+        console.log("[anchored-comment] add-comment handled", {
+          requestId: cmd.payload.requestId,
+          hadSelection: Boolean(lastSelection),
+          commentId,
+        });
+      }
       postToHost(buildCommentCreated(cmd.payload.requestId, commentId), hostTarget());
       break;
     }
