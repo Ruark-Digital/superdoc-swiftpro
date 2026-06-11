@@ -37,6 +37,13 @@ describe("buildSuperdocOptions", () => {
     expect(opts.modules?.toolbar?.excludeItems).toContain("documentMode");
   });
 
+  it("enables the comments module (anchors for host-panel comments)", () => {
+    const opts = buildSuperdocOptions(payload, handlers) as {
+      modules?: { comments?: unknown };
+    };
+    expect(opts.modules?.comments).toEqual({});
+  });
+
   it("builds a .docx Blob document from the transferred bytes", () => {
     const opts = buildSuperdocOptions(payload, handlers);
     expect(opts.document).toBeInstanceOf(Blob);

@@ -47,6 +47,10 @@ export function buildSuperdocOptions(
       // Redline/Comments sidebar is the editing-mode surface. `selector` falls
       // back to the top-level `toolbar` above.
       toolbar: { excludeItems: ["documentMode"] },
+      // Comment marks/highlights for host-anchored comments. The built-in
+      // comments list UI stays unmounted (we never call addCommentsList) —
+      // the host panel is the only comment UI.
+      comments: {},
       ...(collab ? { collaboration: { ydoc: collab.doc, provider: collab.provider } } : {}),
     },
     ...handlers,
