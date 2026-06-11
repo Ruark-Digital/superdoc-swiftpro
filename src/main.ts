@@ -1,8 +1,10 @@
 import { SuperDoc, type Editor } from "@harbour-enterprises/superdoc";
 import "@harbour-enterprises/superdoc/style.css";
 import {
+  buildCommentCreated,
   buildRedlineClicked,
   buildRedlines,
+  buildSelectionState,
   parseHostCommand,
   parseHostMessage,
   postToHost,
@@ -14,8 +16,16 @@ import {
   extractRedlines,
   focusRedline,
 } from "./redlines";
+import {
+  captureSelection,
+  createAnchoredComment,
+  focusComment,
+  type CapturedSelection,
+} from "./comments";
 import { buildSuperdocOptions } from "./superdocOptions";
+import { hydrateImageMedia, type MediaEditorLike } from "./imageMedia";
 import { connectWithTimeout } from "./collabProvider";
+import { observePresence, type AwarenessLike } from "./presence";
 import { pickReadyTargets, resolveHostOrigins } from "./env";
 import "./style.css";
 
@@ -45,6 +55,14 @@ let superdocInstance: SuperDoc | null = null;
 let editorInstance: Editor | null = null;
 /** Last tracked-change id we reported as clicked — dedupes selectionUpdate noise. */
 let lastClickedRedlineId: string | null = null;
+/** Last non-empty text selection — the anchor target for `add-comment`. */
+let lastSelection: CapturedSelection | null = null;
+/** Debounce handle + last posted signal for the selection relay. */
+let selectionTimer: ReturnType<typeof setTimeout> | undefined;
+let lastSelectionSignal = "";
+const SELECTION_DEBOUNCE_MS = 250;
+/** Unsubscribe for the awareness→host presence relay (set once collab connects). */
+let stopPresence: (() => void) | null = null;
 
 function reportError(message: string): void {
   postToHost({ type: "superdoc:error", payload: { message } }, hostTarget());
@@ -74,6 +92,26 @@ function pushRedlines(): void {
 }
 
 /**
+ * Debounced relay of selection state to the host (drives the "anchored to"
+ * chip). Captures at post time so a burst of selectionUpdate events costs one
+ * read; dedupes so collapsed-caret churn doesn't spam the bridge.
+ */
+function scheduleSelectionPost(): void {
+  if (selectionTimer !== undefined) clearTimeout(selectionTimer);
+  selectionTimer = setTimeout(() => {
+    const captured = captureSelection(editorInstance);
+    lastSelection = captured;
+    const signal = captured ? `1:${captured.excerpt}` : "0";
+    if (signal === lastSelectionSignal) return;
+    lastSelectionSignal = signal;
+    postToHost(
+      buildSelectionState(Boolean(captured), captured?.excerpt ?? ""),
+      hostTarget(),
+    );
+  }, SELECTION_DEBOUNCE_MS);
+}
+
+/**
  * Subscribe to the editor's tracked-change and selection signals once the
  * editor exists:
  *  - `tracked-changes-changed` → re-push the redline set to the host.
@@ -86,6 +124,7 @@ function wireEditorEvents(editor: Editor): void {
   });
 
   editor.on("selectionUpdate", () => {
+    scheduleSelectionPost();
     const id = activeRedlineId(editorInstance);
     if (id === lastClickedRedlineId) return;
     lastClickedRedlineId = id;
@@ -125,6 +164,10 @@ async function handleInit(init: SuperdocInit): Promise<void> {
           // tracked-change / selection events (fires before `onReady`).
           editorInstance = editor;
           wireEditorEvents(editor);
+          // Back-fill image bytes from the local docx before first paint so a
+          // join (whose Yjs "media" map may be empty/unsynced) still resolves
+          // embedded images instead of 404-ing on the raw media path.
+          hydrateImageMedia(editor as unknown as MediaEditorLike);
         },
         onReady: ({ superdoc }) => {
           superdocInstance = superdoc;
@@ -134,6 +177,11 @@ async function handleInit(init: SuperdocInit): Promise<void> {
             editorInstance = superdoc.activeEditor;
             wireEditorEvents(superdoc.activeEditor);
           }
+
+          // Safety net for the timing where the editor painted images before
+          // `onEditorCreate` ran: repaint any that fell back to the raw media
+          // path. Idempotent — a fully-resolved document is a no-op.
+          hydrateImageMedia(editorInstance as unknown as MediaEditorLike);
 
           // Clears the host's "Loading editor…" overlay. Include pageCount only
           // when we actually have a number (the host drops non-numbers).
@@ -172,6 +220,33 @@ async function handleInit(init: SuperdocInit): Promise<void> {
         },
       }, joinExisting ? collab : null),
     );
+
+    // Relay room presence (Yjs awareness) to the host so it can render the
+    // avatar stack. Awareness lives on the provider from creation, so this
+    // works for both the JOIN (construction-time) and SEED
+    // (upgradeToCollaboration) paths. No collab → document-only → no presence.
+    if (collab) {
+      const awareness = collab.provider.awareness as unknown as AwarenessLike & {
+        getLocalState(): Record<string, unknown> | null;
+        setLocalStateField(field: string, value: unknown): void;
+      };
+      // Advertise our identity so peers can render our avatar. Merge into any
+      // existing `user` (don't clobber a cursor color SuperDoc may have set).
+      try {
+        const existingUser = (awareness.getLocalState()?.user ?? {}) as Record<
+          string,
+          unknown
+        >;
+        awareness.setLocalStateField("user", {
+          ...existingUser,
+          name: init.payload.user.name,
+        });
+      } catch {
+        // Non-fatal: if awareness isn't writable we still relay what SuperDoc set.
+      }
+      stopPresence?.();
+      stopPresence = observePresence(awareness, hostTarget());
+    }
   } catch (err) {
     reportError(toMessage(err));
   }
@@ -192,11 +267,26 @@ window.addEventListener("message", (event) => {
 window.addEventListener("message", (event) => {
   const cmd = parseHostCommand(event, HOST_ORIGINS);
   if (!cmd) return;
-  if (cmd.type === "superdoc:apply-redline") {
-    applyRedline(editorInstance, cmd.payload.redlineId, cmd.payload.replacement);
-  } else {
-    // `superdoc:focus-redline` — navigateTo lives on the SuperDoc instance.
-    focusRedline(superdocInstance, cmd.payload.redlineId);
+  switch (cmd.type) {
+    case "superdoc:apply-redline":
+      applyRedline(editorInstance, cmd.payload.redlineId, cmd.payload.replacement);
+      break;
+    case "superdoc:focus-redline":
+      // navigateTo lives on the SuperDoc instance.
+      focusRedline(superdocInstance, cmd.payload.redlineId);
+      break;
+    case "superdoc:add-comment": {
+      // Anchor at the last captured selection; null commentId tells the host
+      // to save the comment unanchored (graceful degradation).
+      const commentId = lastSelection
+        ? createAnchoredComment(editorInstance, cmd.payload.text, lastSelection.target)
+        : null;
+      postToHost(buildCommentCreated(cmd.payload.requestId, commentId), hostTarget());
+      break;
+    }
+    case "superdoc:focus-comment":
+      focusComment(superdocInstance, cmd.payload.commentId);
+      break;
   }
 });
 
