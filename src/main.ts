@@ -22,6 +22,7 @@ import {
   focusComment,
   type CapturedSelection,
 } from "./comments";
+import { installFindBar, type SearchEditor } from "./search";
 import { buildSuperdocOptions } from "./superdocOptions";
 import { hydrateImageMedia, type MediaEditorLike } from "./imageMedia";
 import { connectWithTimeout } from "./collabProvider";
@@ -297,6 +298,10 @@ window.addEventListener("message", (event) => {
       break;
   }
 });
+
+// Find bar (Ctrl/Cmd-F) — QA #231. Installed once; the getter reads the live
+// editor so search works as soon as the document is ready.
+installFindBar(() => editorInstance as unknown as SearchEditor | null);
 
 // Handshake: announce readiness so the host sends us `superdoc:init`. Target the
 // actual embedding parent (from referrer) when we can — exactly one origin, no
