@@ -49,6 +49,15 @@ export interface SuperdocInit {
   payload: SuperdocInitPayload;
 }
 
+/** One peer present in the collaboration room, derived from Yjs awareness.
+ *  The host renders these as the presence avatar stack (excludes self). */
+export interface PresenceUser {
+  /** Yjs awareness clientID — stable per connection; used as the React key. */
+  clientId: number;
+  name: string;
+  avatarUrl?: string;
+}
+
 /** Messages this app → host. */
 export type SuperdocOutbound =
   | { type: "superdoc:ready" }
@@ -56,7 +65,10 @@ export type SuperdocOutbound =
   | { type: "superdoc:doc-edit" }
   | { type: "superdoc:error"; payload: { message: string } }
   | { type: "superdoc:redlines"; payload: { redlines: RedlineSpan[] } }
-  | { type: "superdoc:redline-clicked"; payload: { redlineId: string } };
+  | { type: "superdoc:redline-clicked"; payload: { redlineId: string } }
+  | { type: "superdoc:presence"; payload: { users: PresenceUser[] } }
+  | { type: "superdoc:selection"; payload: { hasSelection: boolean; excerpt: string } }
+  | { type: "superdoc:comment-created"; payload: { requestId: string; commentId: string | null } };
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -125,7 +137,9 @@ export function parseHostMessage(event: MessageEvent, hostOrigins: string | stri
 /** Commands the host sends us to act on the document. */
 export type HostCommand =
   | { type: "superdoc:apply-redline"; payload: { redlineId: string; replacement: string } }
-  | { type: "superdoc:focus-redline"; payload: { redlineId: string } };
+  | { type: "superdoc:focus-redline"; payload: { redlineId: string } }
+  | { type: "superdoc:add-comment"; payload: { requestId: string; text: string } }
+  | { type: "superdoc:focus-comment"; payload: { commentId: string } };
 
 export function parseHostCommand(event: MessageEvent, hostOrigins: string | string[]): HostCommand | null {
   if (!isAllowedOrigin(event.origin, hostOrigins)) return null;
@@ -141,6 +155,17 @@ export function parseHostCommand(event: MessageEvent, hostOrigins: string | stri
     if (!isObject(p) || typeof p.redlineId !== "string") return null;
     return { type: "superdoc:focus-redline", payload: { redlineId: p.redlineId } };
   }
+  if (data.type === "superdoc:add-comment") {
+    const p = data.payload;
+    if (!isObject(p) || typeof p.requestId !== "string" || p.requestId.length === 0) return null;
+    if (typeof p.text !== "string" || p.text.length === 0) return null;
+    return { type: "superdoc:add-comment", payload: { requestId: p.requestId, text: p.text } };
+  }
+  if (data.type === "superdoc:focus-comment") {
+    const p = data.payload;
+    if (!isObject(p) || typeof p.commentId !== "string" || p.commentId.length === 0) return null;
+    return { type: "superdoc:focus-comment", payload: { commentId: p.commentId } };
+  }
   return null;
 }
 
@@ -150,6 +175,20 @@ export function buildRedlines(redlines: RedlineSpan[]): SuperdocOutbound {
 
 export function buildRedlineClicked(redlineId: string): SuperdocOutbound {
   return { type: "superdoc:redline-clicked", payload: { redlineId } };
+}
+
+export function buildPresence(users: PresenceUser[]): SuperdocOutbound {
+  return { type: "superdoc:presence", payload: { users } };
+}
+
+/** Selection state for the host's "anchored to selection" chip. */
+export function buildSelectionState(hasSelection: boolean, excerpt: string): SuperdocOutbound {
+  return { type: "superdoc:selection", payload: { hasSelection, excerpt } };
+}
+
+/** Reply to `superdoc:add-comment`; `commentId: null` = anchoring failed. */
+export function buildCommentCreated(requestId: string, commentId: string | null): SuperdocOutbound {
+  return { type: "superdoc:comment-created", payload: { requestId, commentId } };
 }
 
 /**

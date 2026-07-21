@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { parseHostMessage, postToHost, parseHostCommand, buildRedlines, buildRedlineClicked, type SuperdocOutbound } from "./bridge";
+import { parseHostMessage, postToHost, parseHostCommand, buildRedlines, buildRedlineClicked, buildSelectionState, buildCommentCreated, type SuperdocOutbound } from "./bridge";
 
 const HOST = "http://localhost:5173";
 const EVIL = "http://evil.example.com";
@@ -181,5 +181,50 @@ describe("parseHostMessage token", () => {
     const { token: _omit, ...noToken } = validData.payload;
     const ev = { origin: hostOrigin, data: { type: "superdoc:init", payload: noToken } } as MessageEvent;
     expect(parseHostMessage(ev, hostOrigin)).toBeNull();
+  });
+});
+
+describe("anchored-comment bridge messages", () => {
+  it("parses superdoc:add-comment", () => {
+    const data = { type: "superdoc:add-comment", payload: { requestId: "q1", text: "hello" } };
+    expect(parseHostCommand(msg(HOST, data), HOST)).toEqual({
+      type: "superdoc:add-comment",
+      payload: { requestId: "q1", text: "hello" },
+    });
+  });
+
+  it("rejects superdoc:add-comment without requestId or text", () => {
+    const bad = (payload: unknown) =>
+      parseHostCommand(msg(HOST, { type: "superdoc:add-comment", payload }), HOST);
+    expect(bad({ text: "hi" })).toBeNull();
+    expect(bad({ requestId: "q1" })).toBeNull();
+    expect(bad({ requestId: "q1", text: "" })).toBeNull();
+  });
+
+  it("parses superdoc:focus-comment", () => {
+    const data = { type: "superdoc:focus-comment", payload: { commentId: "c1" } };
+    expect(parseHostCommand(msg(HOST, data), HOST)).toEqual({
+      type: "superdoc:focus-comment",
+      payload: { commentId: "c1" },
+    });
+  });
+
+  it("rejects superdoc:focus-comment without a commentId", () => {
+    expect(parseHostCommand(msg(HOST, { type: "superdoc:focus-comment", payload: {} }), HOST)).toBeNull();
+  });
+
+  it("builds selection and comment-created messages", () => {
+    expect(buildSelectionState(true, "quoted text")).toEqual({
+      type: "superdoc:selection",
+      payload: { hasSelection: true, excerpt: "quoted text" },
+    });
+    expect(buildCommentCreated("q1", null)).toEqual({
+      type: "superdoc:comment-created",
+      payload: { requestId: "q1", commentId: null },
+    });
+    expect(buildCommentCreated("q1", "c1")).toEqual({
+      type: "superdoc:comment-created",
+      payload: { requestId: "q1", commentId: "c1" },
+    });
   });
 });
