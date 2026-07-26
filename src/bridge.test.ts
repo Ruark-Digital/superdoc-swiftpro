@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { parseHostMessage, postToHost, parseHostCommand, buildRedlines, buildRedlineClicked, type SuperdocOutbound } from "./bridge";
+import { parseHostMessage, postToHost, parseHostCommand, buildRedlines, buildRedlineClicked, hasCollabConfig, type SuperdocOutbound } from "./bridge";
 
 const HOST = "http://localhost:5173";
 const EVIL = "http://evil.example.com";
@@ -70,15 +70,6 @@ describe("parseHostMessage — shape validation", () => {
   it("rejects when docBytes is not an ArrayBuffer", () => {
     const data = validInitData({ docBytes: "not-bytes" });
     expect(parseHostMessage(msg(HOST, data), HOST)).toBeNull();
-  });
-
-  it("rejects a missing/empty roomId", () => {
-    expect(parseHostMessage(msg(HOST, validInitData({ roomId: "" })), HOST)).toBeNull();
-    expect(parseHostMessage(msg(HOST, validInitData({ roomId: undefined })), HOST)).toBeNull();
-  });
-
-  it("rejects a missing wsUrl", () => {
-    expect(parseHostMessage(msg(HOST, validInitData({ wsUrl: undefined })), HOST)).toBeNull();
   });
 
   it("rejects a malformed user", () => {
@@ -177,9 +168,66 @@ describe("parseHostMessage token", () => {
     expect(parseHostMessage(ev, hostOrigin)?.payload.token).toBe("jwt-abc");
   });
 
-  it("rejects when token is missing", () => {
+  it("accepts a payload with no token and reports it as non-collaborative", () => {
     const { token: _omit, ...noToken } = validData.payload;
     const ev = { origin: hostOrigin, data: { type: "superdoc:init", payload: noToken } } as MessageEvent;
-    expect(parseHostMessage(ev, hostOrigin)).toBeNull();
+    const result = parseHostMessage(ev, hostOrigin);
+
+    expect(result).not.toBeNull();
+    expect(result?.payload.token).toBe("");
+    expect(hasCollabConfig(result!.payload)).toBe(false);
+  });
+});
+
+// The read-only DocumentViewer on the host opens a document with no room,
+// socket or token. Rejecting that payload here made parseHostMessage return
+// null, so handleInit never ran and the host spun on "Preparing the
+// document…" forever — with no error posted back to explain it.
+describe("parseHostMessage — read-only preview (no collaboration)", () => {
+  const viewerPayload = () =>
+    validInitData({ roomId: "-superdoc", wsUrl: "", token: "" });
+
+  it("accepts the payload the read-only viewer actually sends", () => {
+    const result = parseHostMessage(msg(HOST, viewerPayload()), HOST);
+
+    expect(result).not.toBeNull();
+    expect(result?.payload.wsUrl).toBe("");
+    expect(result?.payload.token).toBe("");
+  });
+
+  it("normalises absent collab fields to empty strings", () => {
+    const result = parseHostMessage(
+      msg(HOST, validInitData({ roomId: undefined, wsUrl: undefined, token: undefined })),
+      HOST,
+    );
+
+    expect(result).not.toBeNull();
+    expect(result?.payload.roomId).toBe("");
+    expect(result?.payload.wsUrl).toBe("");
+    expect(result?.payload.token).toBe("");
+  });
+
+  it("still keeps the document itself mandatory", () => {
+    expect(parseHostMessage(msg(HOST, validInitData({ docBytes: "nope" })), HOST)).toBeNull();
+    expect(parseHostMessage(msg(HOST, validInitData({ user: null })), HOST)).toBeNull();
+  });
+});
+
+describe("hasCollabConfig", () => {
+  const payloadOf = (over: Record<string, unknown>) =>
+    parseHostMessage(msg(HOST, validInitData(over)), HOST)!.payload;
+
+  it("is true only when both a socket and a token are present", () => {
+    expect(hasCollabConfig(payloadOf({}))).toBe(true);
+    expect(hasCollabConfig(payloadOf({ wsUrl: "" }))).toBe(false);
+    expect(hasCollabConfig(payloadOf({ token: "" }))).toBe(false);
+  });
+
+  // The host namespaces the room as `${roomId}-superdoc`, so an empty base room
+  // still arrives non-empty. roomId can never be the signal.
+  it("is not fooled by the namespaced empty room the host sends", () => {
+    expect(
+      hasCollabConfig(payloadOf({ roomId: "-superdoc", wsUrl: "", token: "" })),
+    ).toBe(false);
   });
 });
