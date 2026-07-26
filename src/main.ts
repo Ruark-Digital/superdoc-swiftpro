@@ -5,6 +5,7 @@ import {
   buildRedlineClicked,
   buildRedlines,
   buildSelectionState,
+  hasCollabConfig,
   parseHostCommand,
   parseHostMessage,
   postToHost,
@@ -140,12 +141,17 @@ async function handleInit(init: SuperdocInit): Promise<void> {
 
   try {
     // Connect-or-fallback: sync a provider first (or null if unreachable).
-    const collab = await connectWithTimeout({
-      wsUrl: init.payload.wsUrl,
-      roomId: init.payload.roomId,
-      token: init.payload.token,
-      timeoutMs: COLLAB_SYNC_TIMEOUT_MS,
-    });
+    // Skip it entirely for a read-only preview, which carries no socket or
+    // token — otherwise we'd burn the full COLLAB_SYNC_TIMEOUT_MS waiting on a
+    // connection that was never going to be attempted.
+    const collab = hasCollabConfig(init.payload)
+      ? await connectWithTimeout({
+          wsUrl: init.payload.wsUrl,
+          roomId: init.payload.roomId,
+          token: init.payload.token,
+          timeoutMs: COLLAB_SYNC_TIMEOUT_MS,
+        })
+      : null;
 
     // Seed vs join (see CollabHandle.isNewRoom):
     //  • Empty room  → render document-only from the bytes, then SEED the room
