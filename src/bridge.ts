@@ -97,10 +97,18 @@ export function parseHostMessage(event: MessageEvent, hostOrigins: string | stri
   if (!(payload.docBytes instanceof ArrayBuffer)) return null;
   if (typeof payload.fileName !== "string") return null;
   if (typeof payload.fileType !== "string") return null;
-  if (typeof payload.roomId !== "string" || payload.roomId.length === 0) return null;
-  if (typeof payload.wsUrl !== "string" || payload.wsUrl.length === 0) return null;
-  if (typeof payload.token !== "string" || payload.token.length === 0) return null;
   if (!isUser(payload.user)) return null;
+
+  // Collaboration is OPTIONAL. The host's read-only DocumentViewer opens a
+  // document with no room, socket or token at all, and previously those empty
+  // strings failed the checks here — parseHostMessage returned null, handleInit
+  // never ran, SuperDoc was never constructed, and the host waited forever for
+  // an `editor-ready` that could not arrive. Rejecting silently on this side of
+  // a postMessage bridge reads as an infinite hang on the other, so accept the
+  // payload and let handleInit render document-only (see hasCollabConfig).
+  const roomId = typeof payload.roomId === "string" ? payload.roomId : "";
+  const wsUrl = typeof payload.wsUrl === "string" ? payload.wsUrl : "";
+  const token = typeof payload.token === "string" ? payload.token : "";
 
   // documentMode defaults to "editing" if absent/invalid (per the host contract).
   const documentMode = DOCUMENT_MODES.includes(payload.documentMode as DocumentMode)
@@ -115,11 +123,24 @@ export function parseHostMessage(event: MessageEvent, hostOrigins: string | stri
       fileType: payload.fileType,
       documentMode,
       user: payload.user,
-      roomId: payload.roomId,
-      wsUrl: payload.wsUrl,
-      token: payload.token,
+      roomId,
+      wsUrl,
+      token,
     },
   };
+}
+
+/**
+ * True when the payload carries everything needed to join a collaboration room.
+ *
+ * ⚠️ `roomId` alone is not a reliable signal: the host namespaces it as
+ * `` `${roomId}-superdoc` ``, so an empty base room still arrives as the
+ * non-empty string `"-superdoc"`. `wsUrl` and `token` are passed through
+ * untouched, so they are what actually distinguishes a collaborative session
+ * from a read-only preview.
+ */
+export function hasCollabConfig(payload: SuperdocInitPayload): boolean {
+  return payload.wsUrl.length > 0 && payload.token.length > 0;
 }
 
 /** Commands the host sends us to act on the document. */
