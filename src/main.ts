@@ -12,8 +12,10 @@ import {
 import {
   activeRedlineId,
   applyRedline,
+  canMarkSelectedText,
   extractRedlines,
   focusRedline,
+  markSelectedTextAsRedline,
 } from "./redlines";
 import { buildSuperdocOptions } from "./superdocOptions";
 import { connectWithTimeout } from "./collabProvider";
@@ -46,6 +48,19 @@ let superdocInstance: SuperDoc | null = null;
 let editorInstance: Editor | null = null;
 /** Last tracked-change id we reported as clicked — dedupes selectionUpdate noise. */
 let lastClickedRedlineId: string | null = null;
+/** Reentrancy guard: the redline mutation itself fires `selectionUpdate`. */
+let isMarkingSelection = false;
+/** Pending debounce handle for auto-redlining a settled selection. */
+let markSelectionTimer: ReturnType<typeof setTimeout> | undefined;
+
+/**
+ * A live drag emits `selectionUpdate` on every pointer move, so marking on the
+ * first tick would redline a one-character sliver and then the guard (the
+ * selection now overlaps a change) blocks extending it to the full span. Waiting
+ * for the selection to settle marks the whole highlight exactly once, on the
+ * final range — after the user finishes selecting.
+ */
+const SELECTION_REDLINE_DEBOUNCE_MS = 250;
 
 function reportError(message: string): void {
   postToHost({ type: "superdoc:error", payload: { message } }, hostTarget());
@@ -75,6 +90,25 @@ function pushRedlines(): void {
 }
 
 /**
+ * (Re)arm the debounce that auto-redlines the current selection once it stops
+ * changing. Re-reads the live selection when it fires, so it always acts on the
+ * final settled range regardless of how the timer was scheduled.
+ */
+function scheduleRedlineForSettledSelection(): void {
+  if (markSelectionTimer !== undefined) clearTimeout(markSelectionTimer);
+  markSelectionTimer = setTimeout(() => {
+    markSelectionTimer = undefined;
+    if (isMarkingSelection || !canMarkSelectedText(editorInstance)) return;
+    isMarkingSelection = true;
+    try {
+      if (markSelectedTextAsRedline(editorInstance)) pushRedlines();
+    } finally {
+      isMarkingSelection = false;
+    }
+  }, SELECTION_REDLINE_DEBOUNCE_MS);
+}
+
+/**
  * Subscribe to the editor's tracked-change and selection signals once the
  * editor exists:
  *  - `tracked-changes-changed` → re-push the redline set to the host.
@@ -87,6 +121,11 @@ function wireEditorEvents(editor: Editor): void {
   });
 
   editor.on("selectionUpdate", () => {
+    // A selected text range is the user's redline target. Turn it into a tracked
+    // change (once the selection settles) so SuperDoc's native Accept/Reject
+    // controls and the host's AI Redline panel operate on the same change. The
+    // `selectionUpdate` the mark itself emits is ignored via `isMarkingSelection`.
+    if (!isMarkingSelection) scheduleRedlineForSettledSelection();
     const id = activeRedlineId(editorInstance);
     if (id === lastClickedRedlineId) return;
     lastClickedRedlineId = id;
