@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { connectWithTimeout } from "./collabProvider";
+import {
+  SEED_MARKER_KEY,
+  SEED_MARKER_MAP,
+  connectWithTimeout,
+} from "./collabProvider";
 
 type Handler = (arg: boolean) => void;
 
@@ -73,16 +77,16 @@ describe("connectWithTimeout", () => {
     expect(handle?.isNewRoom).toBe(true);
   });
 
-  it("flags a populated synced room as not new (join, don't seed)", async () => {
+  it("flags a seeded synced room as not new (join, don't seed)", async () => {
     vi.useFakeTimers();
     const provider = fakeProvider({ syncAfterMs: 100 });
     const promise = connectWithTimeout(
       { wsUrl: "wss://x/y", roomId: "r-superdoc", token: "t", timeoutMs: 1000 },
       {
-        // Simulate a room that already has content by writing to the doc the
-        // moment the provider is created (mirrors a server delivering state).
+        // Simulate a room the server delivers already carrying the seed marker
+        // (mirrors a prior client that finished seeding and flushed).
         createProvider: (_wsUrl, _room, doc) => {
-          doc.getMap("seed").set("x", 1);
+          doc.getMap(SEED_MARKER_MAP).set(SEED_MARKER_KEY, true);
           return provider as never;
         },
       },
@@ -90,5 +94,29 @@ describe("connectWithTimeout", () => {
     await vi.advanceTimersByTimeAsync(150);
     const handle = await promise;
     expect(handle?.isNewRoom).toBe(false);
+  });
+
+  it("flags a room with shared types but no seed marker as new (re-seed)", async () => {
+    // Regression: "open a fresh doc → leave immediately → return" left the
+    // server holding SuperDoc's shared types with no content and no marker. The
+    // old `doc.share.size === 0` check misread that as populated → JOIN → a
+    // single blank page. It must now read as new so the docx is re-seeded.
+    vi.useFakeTimers();
+    const provider = fakeProvider({ syncAfterMs: 100 });
+    const promise = connectWithTimeout(
+      { wsUrl: "wss://x/y", roomId: "r-superdoc", token: "t", timeoutMs: 1000 },
+      {
+        createProvider: (_wsUrl, _room, doc) => {
+          // Shared types exist (share.size > 0) but the room was never marked
+          // seeded — a half-flushed seed.
+          doc.getMap("comments").set("x", 1);
+          doc.getXmlFragment("body");
+          return provider as never;
+        },
+      },
+    );
+    await vi.advanceTimersByTimeAsync(150);
+    const handle = await promise;
+    expect(handle?.isNewRoom).toBe(true);
   });
 });
