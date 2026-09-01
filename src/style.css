@@ -100,6 +100,74 @@ body {
   margin-right: auto !important;
 }
 
+/*
+ * Find bar (Ctrl/Cmd-F) — QA #231. A small floating toolbar pinned top-right,
+ * above the document. Driven by src/search.ts via SuperDoc's search commands.
+ */
+.find-bar {
+  position: fixed;
+  top: 12px;
+  right: 16px;
+  z-index: 2147483001;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  box-shadow: 0 6px 20px rgba(15, 23, 42, 0.15);
+}
+.find-bar[hidden] {
+  display: none;
+}
+.find-bar__input {
+  width: 200px;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #111827;
+  outline: none;
+}
+.find-bar__input:focus {
+  border-color: #2a4467;
+  box-shadow: 0 0 0 2px rgba(42, 68, 103, 0.15);
+}
+.find-bar__count {
+  min-width: 62px;
+  font-size: 12px;
+  color: #6b7280;
+  text-align: center;
+  white-space: nowrap;
+}
+.find-bar__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: #374151;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+.find-bar__btn:hover:not(:disabled) {
+  background: #f3f4f6;
+}
+.find-bar__btn:disabled {
+  color: #d1d5db;
+  cursor: default;
+}
+.find-bar__close {
+  font-size: 18px;
+}
+
 /* AGPL §13 source-offer link — present but out of the way. */
 .agpl-source-link {
   position: fixed;
