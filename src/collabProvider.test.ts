@@ -1,9 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  SEED_MARKER_KEY,
-  SEED_MARKER_MAP,
-  connectWithTimeout,
-} from "./collabProvider";
+import * as Y from "yjs";
+import { DOC_FRAGMENT, connectWithTimeout } from "./collabProvider";
+
+/** Populate the body fragment the way a seeded room arrives from the server. */
+function seedBody(doc: Y.Doc): void {
+  const p = new Y.XmlElement("paragraph");
+  p.insert(0, [new Y.XmlText("hello")]);
+  doc.getXmlFragment(DOC_FRAGMENT).insert(0, [p]);
+}
 
 type Handler = (arg: boolean) => void;
 
@@ -77,16 +81,16 @@ describe("connectWithTimeout", () => {
     expect(handle?.isNewRoom).toBe(true);
   });
 
-  it("flags a seeded synced room as not new (join, don't seed)", async () => {
+  it("flags a room with body content as not new (join, don't seed)", async () => {
     vi.useFakeTimers();
     const provider = fakeProvider({ syncAfterMs: 100 });
     const promise = connectWithTimeout(
       { wsUrl: "wss://x/y", roomId: "r-superdoc", token: "t", timeoutMs: 1000 },
       {
-        // Simulate a room the server delivers already carrying the seed marker
-        // (mirrors a prior client that finished seeding and flushed).
+        // Simulate a room the server delivers already carrying document content
+        // in the body fragment (a prior client that finished seeding).
         createProvider: (_wsUrl, _room, doc) => {
-          doc.getMap(SEED_MARKER_MAP).set(SEED_MARKER_KEY, true);
+          seedBody(doc);
           return provider as never;
         },
       },
@@ -96,21 +100,23 @@ describe("connectWithTimeout", () => {
     expect(handle?.isNewRoom).toBe(false);
   });
 
-  it("flags a room with shared types but no seed marker as new (re-seed)", async () => {
-    // Regression: "open a fresh doc → leave immediately → return" left the
-    // server holding SuperDoc's shared types with no content and no marker. The
-    // old `doc.share.size === 0` check misread that as populated → JOIN → a
-    // single blank page. It must now read as new so the docx is re-seeded.
+  it("flags a room with side structures but no body content as new (re-seed)", async () => {
+    // Regression: opening a fresh doc then reloading showed a single blank page.
+    // A seed can leave the server holding SuperDoc's side structures (a `meta`
+    // bootstrap flag, a `media`/`comments` map) while the body fragment never
+    // lands. `doc.share.size === 0` and a "seeded" marker both misread that as
+    // populated → JOIN → blank. Only an empty body fragment must count as new so
+    // the docx is re-seeded.
     vi.useFakeTimers();
     const provider = fakeProvider({ syncAfterMs: 100 });
     const promise = connectWithTimeout(
       { wsUrl: "wss://x/y", roomId: "r-superdoc", token: "t", timeoutMs: 1000 },
       {
         createProvider: (_wsUrl, _room, doc) => {
-          // Shared types exist (share.size > 0) but the room was never marked
-          // seeded — a half-flushed seed.
+          // Side structures present (share.size > 0), body fragment empty.
+          doc.getMap("meta").set("bootstrap", true);
           doc.getMap("comments").set("x", 1);
-          doc.getXmlFragment("body");
+          doc.getXmlFragment(DOC_FRAGMENT); // registered but empty
           return provider as never;
         },
       },
