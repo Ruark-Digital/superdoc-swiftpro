@@ -12,7 +12,7 @@
  *   - `editor.doc: DocumentApi`                         — high-level doc API
  *   - `editor.doc.trackChanges.list({ in: 'all' })`     — enumerate changes
  *   - `editor.doc.trackChanges.decide({decision,target})` — accept/reject
- *   - `editor.doc.replace({ ref, text }, { changeMode }) ` — set live text
+ *   - `editor.doc.delete({ target }, { changeMode })` — create a tracked deletion
  *   - `editor.doc.selection.current()`                  — caret's activeChangeIds
  *   - `superdoc.navigateTo({kind:'entity',entityType:'trackedChange',entityId})`
  */
@@ -40,6 +40,30 @@ interface TrackedChangeItem {
 }
 
 /**
+ * The `target` shape `editor.doc.selection.current()` returns: a `TextTarget`,
+ * i.e. one or more anchored `{ blockId, range }` segments in document order.
+ * This is a *read* projection and is NOT accepted directly by mutation ops.
+ */
+interface TextTargetLike {
+  kind: string;
+  segments?: { blockId: string; range: { start: number; end: number } }[];
+  story?: unknown;
+}
+
+/**
+ * The `SelectionTarget` shape the mutation ops (`delete`, `replace`, …) require.
+ * A contiguous selection expressed as `start`/`end` points — a DIFFERENT shape
+ * from the {@link TextTargetLike} that `selection.current()` returns, which is
+ * why the two must be bridged (see {@link textTargetToSelectionTarget}).
+ */
+interface SelectionTargetLike {
+  kind: "selection";
+  start: { kind: "text"; blockId: string; offset: number };
+  end: { kind: "text"; blockId: string; offset: number };
+  story?: unknown;
+}
+
+/**
  * Minimal structural view of the `editor.doc` surface we depend on. Kept narrow
  * so a SuperDoc minor bump that touches unrelated parts of `DocumentApi` does
  * not break our typecheck.
@@ -56,11 +80,50 @@ interface DocApiLike {
     input: { ref: string; text: string },
     options?: { changeMode?: "direct" | "tracked" },
   ) => unknown;
+  delete: (
+    input: { target: SelectionTargetLike },
+    options?: { changeMode?: "direct" | "tracked" },
+  ) => unknown;
   selection: {
     current: (input?: { includeText?: boolean }) => {
+      empty?: boolean;
+      target?: TextTargetLike | null;
+      text?: string;
       activeChangeIds?: string[];
     };
   };
+}
+
+/**
+ * Bridge the `TextTarget` that `selection.current()` returns into the
+ * `SelectionTarget` that `doc.delete` (and the other selection-mutation ops)
+ * require. They are deliberately different types in the Document API: the read
+ * projection is multi-segment `{ blockId, range }`, the mutation input is a
+ * single contiguous `{ start, end }` point pair. Passing the former straight to
+ * `delete` throws `target must be a SelectionTarget object`, so this collapses
+ * the segment list to its first-start / last-end boundary.
+ *
+ * Returns null when the target isn't usable text (so callers no-op rather than
+ * hand `delete` an invalid shape).
+ */
+function textTargetToSelectionTarget(
+  target: TextTargetLike | null | undefined,
+): SelectionTargetLike | null {
+  const segments = target?.segments;
+  if (!target || target.kind !== "text" || !segments || segments.length === 0) {
+    return null;
+  }
+  const first = segments[0];
+  const last = segments[segments.length - 1];
+  if (!first?.blockId || !last?.blockId || !first.range || !last.range) return null;
+
+  const selectionTarget: SelectionTargetLike = {
+    kind: "selection",
+    start: { kind: "text", blockId: first.blockId, offset: first.range.start },
+    end: { kind: "text", blockId: last.blockId, offset: last.range.end },
+  };
+  if (target.story) selectionTarget.story = target.story;
+  return selectionTarget;
 }
 
 function getDoc(editor: Editor | null): DocApiLike | null {
@@ -231,5 +294,58 @@ export function activeRedlineId(editor: Editor | null): string | null {
     return ids.length > 0 ? ids[0] : null;
   } catch {
     return null;
+  }
+}
+
+/** Whether the current text selection can be turned into one tracked change. */
+export function canMarkSelectedText(editor: Editor | null): boolean {
+  if (!editor) return false;
+  // Read-only / viewing documents: keep the selection plain. This is the
+  // "select without redlining" escape hatch — the host puts the editor into a
+  // non-editable mode (`viewing`) when it isn't the user's turn, so selecting
+  // to read or copy there never mutates the document.
+  if ((editor as unknown as { isEditable?: boolean }).isEditable === false) {
+    return false;
+  }
+  const doc = getDoc(editor);
+  if (!doc) return false;
+  try {
+    const selection = doc.selection.current({ includeText: true });
+    return !selection.empty && Boolean(selection.target) && Boolean(selection.text) &&
+      (selection.activeChangeIds ?? []).length === 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Turn the current selected text into a tracked deletion. A same-text
+ * replacement is a SuperDoc no-op; a tracked deletion is a real redline that
+ * remains visible until it is accepted or rejected.
+ *
+ * The selection's `target` is a `TextTarget` (the read projection), which
+ * `doc.delete` rejects — it wants a `SelectionTarget`. We convert between the
+ * two before deleting; without that the delete throws and the redline (and the
+ * Accept/Reject toolbar buttons that depend on it) never appears.
+ */
+export function markSelectedTextAsRedline(editor: Editor | null): boolean {
+  const doc = getDoc(editor);
+  if (!doc) return false;
+  try {
+    const selection = doc.selection.current({ includeText: true });
+    if (
+      selection.empty ||
+      !selection.target ||
+      !selection.text ||
+      (selection.activeChangeIds ?? []).length > 0
+    ) {
+      return false;
+    }
+    const target = textTargetToSelectionTarget(selection.target);
+    if (!target) return false;
+    doc.delete({ target }, { changeMode: "tracked" });
+    return true;
+  } catch {
+    return false;
   }
 }

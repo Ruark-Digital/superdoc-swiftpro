@@ -42,11 +42,6 @@ export function buildSuperdocOptions(
     documentMode: payload.documentMode,
     user: payload.user,
     modules: {
-      // Hide SuperDoc's built-in document-mode switcher (the user-edit icon at
-      // the toolbar's right end). The host controls the mode; SwiftPro's own
-      // Redline/Comments sidebar is the editing-mode surface. `selector` falls
-      // back to the top-level `toolbar` above.
-      toolbar: { excludeItems: ["documentMode"] },
       ...(collab ? { collaboration: { ydoc: collab.doc, provider: collab.provider } } : {}),
     },
     ...handlers,

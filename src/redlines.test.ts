@@ -3,8 +3,10 @@ import type { Editor } from "@harbour-enterprises/superdoc";
 import {
   activeRedlineId,
   applyRedline,
+  canMarkSelectedText,
   extractRedlines,
   focusRedline,
+  markSelectedTextAsRedline,
   trackedChangeToSpan,
 } from "./redlines";
 
@@ -15,7 +17,9 @@ import {
 function fakeEditor(opts: {
   items?: unknown[];
   activeChangeIds?: string[];
+  selection?: { empty?: boolean; target?: unknown; text?: string; activeChangeIds?: string[] };
   onReplace?: (input: unknown, options: unknown) => void;
+  onDelete?: (input: unknown, options: unknown) => void;
   onDecide?: (input: unknown) => void;
   listThrows?: boolean;
 }): Editor {
@@ -28,8 +32,9 @@ function fakeEditor(opts: {
       decide: (input: unknown) => opts.onDecide?.(input),
     },
     replace: (input: unknown, options: unknown) => opts.onReplace?.(input, options),
+    delete: (input: unknown, options: unknown) => opts.onDelete?.(input, options),
     selection: {
-      current: () => ({ activeChangeIds: opts.activeChangeIds ?? [] }),
+      current: () => opts.selection ?? ({ activeChangeIds: opts.activeChangeIds ?? [] }),
     },
   };
   return { doc } as unknown as Editor;
@@ -145,6 +150,77 @@ describe("activeRedlineId", () => {
     expect(activeRedlineId(fakeEditor({ activeChangeIds: ["a", "b"] }))).toBe("a");
     expect(activeRedlineId(fakeEditor({ activeChangeIds: [] }))).toBeNull();
     expect(activeRedlineId(null)).toBeNull();
+  });
+});
+
+describe("markSelectedTextAsRedline", () => {
+  // A realistic `selection.current()` target: a TextTarget (the read
+  // projection), NOT the SelectionTarget the mutation ops require.
+  const selection = {
+    empty: false,
+    target: { kind: "text", segments: [{ blockId: "b1", range: { start: 2, end: 15 } }] },
+    text: "Selected text",
+  };
+
+  it("is available only for a plain text selection", () => {
+    expect(canMarkSelectedText(fakeEditor({ selection }))).toBe(true);
+    expect(canMarkSelectedText(fakeEditor({ selection: { empty: true, text: "" } }))).toBe(false);
+    expect(canMarkSelectedText(fakeEditor({ selection: { ...selection, activeChangeIds: ["tc1"] } }))).toBe(false);
+  });
+
+  it("creates a tracked deletion, converting the TextTarget to a SelectionTarget", () => {
+    const onDelete = vi.fn();
+    expect(markSelectedTextAsRedline(fakeEditor({ selection, onDelete }))).toBe(true);
+    // doc.delete must receive a SelectionTarget (start/end points), not the raw
+    // TextTarget — passing the latter throws "target must be a SelectionTarget".
+    expect(onDelete).toHaveBeenCalledWith(
+      {
+        target: {
+          kind: "selection",
+          start: { kind: "text", blockId: "b1", offset: 2 },
+          end: { kind: "text", blockId: "b1", offset: 15 },
+        },
+      },
+      { changeMode: "tracked" },
+    );
+  });
+
+  it("spans multiple segments from first-start to last-end", () => {
+    const onDelete = vi.fn();
+    const multi = {
+      empty: false,
+      text: "across blocks",
+      target: {
+        kind: "text",
+        segments: [
+          { blockId: "b1", range: { start: 4, end: 9 } },
+          { blockId: "b2", range: { start: 0, end: 7 } },
+        ],
+      },
+    };
+    expect(markSelectedTextAsRedline(fakeEditor({ selection: multi, onDelete }))).toBe(true);
+    expect(onDelete).toHaveBeenCalledWith(
+      {
+        target: {
+          kind: "selection",
+          start: { kind: "text", blockId: "b1", offset: 4 },
+          end: { kind: "text", blockId: "b2", offset: 7 },
+        },
+      },
+      { changeMode: "tracked" },
+    );
+  });
+
+  it("no-ops on a target with no usable segments", () => {
+    const onDelete = vi.fn();
+    const bad = { empty: false, text: "x", target: { kind: "text", segments: [] } };
+    expect(markSelectedTextAsRedline(fakeEditor({ selection: bad, onDelete }))).toBe(false);
+    expect(onDelete).not.toHaveBeenCalled();
+  });
+
+  it("keeps the selection plain when the editor is read-only", () => {
+    const readOnly = { doc: { selection: { current: () => selection } }, isEditable: false } as unknown as Editor;
+    expect(canMarkSelectedText(readOnly)).toBe(false);
   });
 });
 

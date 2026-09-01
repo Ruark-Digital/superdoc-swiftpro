@@ -30,11 +30,11 @@ describe("buildSuperdocOptions", () => {
     expect(opts.modules?.collaboration).toBeUndefined();
   });
 
-  it("hides the documentMode toolbar item via excludeItems", () => {
+  it("keeps the documentMode toolbar item available for tracked changes", () => {
     const opts = buildSuperdocOptions(payload, handlers) as {
       modules?: { toolbar?: { excludeItems?: string[] } };
     };
-    expect(opts.modules?.toolbar?.excludeItems).toContain("documentMode");
+    expect(opts.modules?.toolbar?.excludeItems ?? []).not.toContain("documentMode");
   });
 
   it("builds a .docx Blob document from the transferred bytes", () => {
