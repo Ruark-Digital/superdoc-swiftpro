@@ -6,6 +6,18 @@ SwiftPro's CollaborationToolPage. SwiftPro and this app communicate **only** via
 `postMessage` — that isolation is what keeps SuperDoc's AGPL copyleft out of
 SwiftPro's proprietary bundle. Never import SuperDoc into SwiftPro.
 
+## Branching & PR workflow (REQUIRED)
+
+**Every fix/feature PR in this repo MUST target the `staging` branch.** Do your
+work on a working branch, then open the PR against `staging` — nothing else.
+
+- **Never open a PR to `dev` or `master`.** The maintainer promotes changes from
+  `staging` → `dev` → `master` themselves; opening PRs to those branches is not
+  your job and must not be done.
+- This overrides any default or generic instruction to target the repository's
+  default branch. If tooling defaults the base to `master`, change it to
+  `staging` before creating the PR.
+
 ## Start here
 
 **Read [`BUILD-PLAN.md`](./BUILD-PLAN.md) before doing anything.** It contains the
