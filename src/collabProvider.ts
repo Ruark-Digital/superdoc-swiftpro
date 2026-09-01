@@ -11,31 +11,31 @@ export interface CollabConnectConfig {
 }
 
 /**
- * Yjs map + key we stamp once a room has been authoritatively seeded from a
- * docx. Presence of this flag — NOT merely the existence of shared types — is
- * what tells a returning client to JOIN rather than re-SEED.
- *
- * `upgradeToCollaboration` registers SuperDoc's shared types (so `doc.share`
- * becomes non-empty) before the document content has necessarily flushed to the
- * server. A client that opened a fresh room and left immediately could leave the
- * server holding those empty type structures with no content, which the old
- * `doc.share.size === 0` check misread as "already populated" → JOIN → a blank
- * page. Because Yjs updates flush in order over the single socket, this marker
- * can only have reached the server if the seed content that preceded it did too,
- * so a room whose seed was interrupted before flushing correctly reads as new
- * and is re-seeded from the docx the client still holds.
+ * SuperDoc stores the document body in a Yjs XML fragment named `"supereditor"`
+ * (this is the fragment `upgradeToCollaboration` seeds and construction-time
+ * collaboration hydrates from). We key seed-vs-join off whether that fragment
+ * actually holds content — the only thing that decides whether a JOIN paints a
+ * real document or a blank page.
  */
-export const SEED_MARKER_MAP = "__swiftpro_meta";
-export const SEED_MARKER_KEY = "seeded";
+export const DOC_FRAGMENT = "supereditor";
 
-/** True once {@link markRoomSeeded} has stamped this (synced) room. */
-export function roomIsSeeded(doc: Y.Doc): boolean {
-  return doc.getMap(SEED_MARKER_MAP).get(SEED_MARKER_KEY) === true;
-}
-
-/** Stamp the seed marker after a successful `upgradeToCollaboration` seed. */
-export function markRoomSeeded(doc: Y.Doc): void {
-  doc.getMap(SEED_MARKER_MAP).set(SEED_MARKER_KEY, true);
+/**
+ * True when the synced room already holds document content, i.e. the
+ * `"supereditor"` fragment has at least one child. Only then is JOINing safe;
+ * an empty fragment must be (re-)seeded from the docx.
+ *
+ * Why not a marker / `doc.share.size`: `upgradeToCollaboration` registers
+ * SuperDoc's shared types and writes a `meta` bootstrap flag as part of seeding,
+ * and any of those can reach the server independently of the (larger) body
+ * fragment — a seed interrupted mid-flush, or a collab server that drops room
+ * state, can leave the room with those side structures present but the body
+ * empty. `doc.share.size === 0` and a "seeded" flag both misread that as
+ * populated → JOIN → the blank page users saw on reload. Testing the body
+ * fragment directly is the signal that matches what actually renders, and it
+ * self-heals: an empty body always re-seeds from the docx the client still holds.
+ */
+export function roomHasContent(doc: Y.Doc): boolean {
+  return doc.getXmlFragment(DOC_FRAGMENT).length > 0;
 }
 
 /** A synced collaboration handle, ready to hand to SuperDoc's collaboration module. */
@@ -43,11 +43,10 @@ export interface CollabHandle {
   doc: Y.Doc;
   provider: WebsocketProvider;
   /**
-   * True when the synced room has not yet been seeded (no {@link SEED_MARKER_KEY}
-   * flag) — i.e. this client should SEED the room from the document via SuperDoc
-   * `upgradeToCollaboration`, then call {@link markRoomSeeded}. When false, the
-   * room was already seeded and the caller should JOIN it (construction-time
-   * collaboration) rather than re-seed, to avoid disturbing other users' state.
+   * True when the synced room's body fragment is empty — i.e. this client should
+   * SEED the room from the document via SuperDoc `upgradeToCollaboration`. When
+   * false, the room already holds document content and the caller should JOIN it
+   * (construction-time collaboration) rather than re-seed.
    */
   isNewRoom: boolean;
 }
@@ -92,11 +91,10 @@ export function connectWithTimeout(
       settled = true;
       clearTimeout(timer);
       if (synced) {
-        // After the initial sync, the room is "new" (needs seeding) unless it
-        // carries our seed marker. Testing content presence rather than
-        // `doc.share.size` avoids misreading a half-flushed seed (empty shared
-        // types, no content) as populated — see SEED_MARKER_MAP.
-        const isNewRoom = !roomIsSeeded(doc);
+        // After the initial sync, the room needs seeding unless its body
+        // fragment already holds content. See roomHasContent for why we test the
+        // fragment directly rather than `doc.share.size` or a seed marker.
+        const isNewRoom = !roomHasContent(doc);
         resolve({ doc, provider: provider as unknown as WebsocketProvider, isNewRoom });
       } else {
         provider.destroy();
