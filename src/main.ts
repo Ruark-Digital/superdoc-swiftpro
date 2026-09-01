@@ -26,7 +26,7 @@ import {
 import { installFindBar, type SearchEditor } from "./search";
 import { buildSuperdocOptions } from "./superdocOptions";
 import { hydrateImageMedia, type MediaEditorLike } from "./imageMedia";
-import { connectWithTimeout } from "./collabProvider";
+import { connectWithTimeout, markRoomSeeded } from "./collabProvider";
 import { observePresence, type AwarenessLike } from "./presence";
 import { pickReadyTargets, resolveHostOrigins } from "./env";
 import "./style.css";
@@ -208,6 +208,15 @@ async function handleInit(init: SuperdocInit): Promise<void> {
           if (collab && collab.isNewRoom) {
             void superdoc
               .upgradeToCollaboration({ ydoc: collab.doc, provider: collab.provider })
+              .then(() => {
+                // Stamp the seed marker only after the content is in the ydoc, so
+                // it flushes to the server behind the seed content. A returning
+                // client treats the room as already-seeded only when this marker
+                // is present — otherwise it re-seeds (see SEED_MARKER_MAP). This
+                // is what stops "open → leave immediately → return" from showing a
+                // single empty page.
+                markRoomSeeded(collab.doc);
+              })
               .catch((error) => {
                 if (import.meta.env.DEV) {
                   // eslint-disable-next-line no-console
