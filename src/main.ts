@@ -29,6 +29,7 @@ import { hydrateImageMedia, type MediaEditorLike } from "./imageMedia";
 import { connectWithTimeout } from "./collabProvider";
 import { observePresence, type AwarenessLike } from "./presence";
 import { pickReadyTargets, resolveHostOrigins } from "./env";
+import { diag, describeOrigin } from "./diag";
 import "./style.css";
 
 // Allowlist of host origins permitted to embed/drive this editor (one editor
@@ -253,6 +254,52 @@ async function handleInit(init: SuperdocInit): Promise<void> {
       }
       stopPresence?.();
       stopPresence = observePresence(awareness, hostTarget());
+
+      // DIAGNOSTIC (live-collab bug): watch the two channels that carry live
+      // collaboration between peers.
+      try {
+        // 1) Awareness churn. Rapid added/removed cycles are the avatar flicker;
+        //    a peer present in the state map but with no `user.name` is why it
+        //    drops out of the relayed presence list (and shows no cursor).
+        const aw = collab.provider.awareness as unknown as {
+          clientID: number;
+          getStates(): Map<number, { user?: { name?: unknown } }>;
+          on(
+            event: "change",
+            cb: (d: { added: number[]; updated: number[]; removed: number[] }) => void,
+          ): void;
+        };
+        aw.on("change", ({ added, updated, removed }) => {
+          const states = aw.getStates();
+          const peers = [...states.entries()]
+            .filter(([id]) => id !== aw.clientID)
+            .map(([id, s]) => ({
+              id,
+              name: typeof s?.user?.name === "string" ? s.user.name : null,
+            }));
+          diag("awareness.change", {
+            self: aw.clientID,
+            total: states.size,
+            peers,
+            added,
+            updated,
+            removed,
+          });
+        });
+
+        // 2) Doc updates. A remote-origin update proves peer edits are crossing
+        //    the wire; if only local-origin updates ever appear, the peers are
+        //    isolated (edits never sync, no remote cursor).
+        collab.doc.on("update", (update: Uint8Array, origin: unknown) => {
+          diag("doc.update", {
+            origin: describeOrigin(origin),
+            bytes: update.byteLength,
+            local: origin === null || origin === undefined,
+          });
+        });
+      } catch {
+        // Diagnostics must never break collaboration.
+      }
     }
   } catch (err) {
     reportError(toMessage(err));

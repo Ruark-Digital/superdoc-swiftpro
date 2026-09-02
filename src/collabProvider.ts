@@ -1,6 +1,7 @@
 import * as Y from "yjs";
 import { WebsocketProvider } from "y-websocket";
 import { makeAuthWebSocketClass } from "./collabSocket";
+import { diag } from "./diag";
 
 export interface CollabConnectConfig {
   wsUrl: string;
@@ -124,6 +125,30 @@ export function connectWithTimeout(
     const doc = new Y.Doc();
     const provider = deps.createProvider(config.wsUrl, config.roomId, doc, config.token);
     let settled = false;
+
+    // DIAGNOSTIC (live-collab bug): long-lived connection-lifecycle trace. These
+    // listeners intentionally outlive the initial-sync settle below so a
+    // reconnect loop (status flapping / repeated closes after we're connected)
+    // is visible — that loop clears and restores peers (avatar flicker) and
+    // disrupts live updates. Attached best-effort; a fake provider in tests may
+    // not emit "status", which is fine.
+    let reconnects = 0;
+    const traced = provider as unknown as {
+      on(event: string, cb: (arg: unknown) => void): void;
+    };
+    try {
+      traced.on("status", (s: unknown) => {
+        const status = (s as { status?: string })?.status ?? s;
+        if (status === "connecting" && settled) reconnects += 1;
+        diag("collab.status", { roomId: config.roomId, status, reconnects });
+      });
+      traced.on("connection-close", () =>
+        diag("collab.close", { roomId: config.roomId, reconnects }),
+      );
+      traced.on("connection-error", () => diag("collab.error", { roomId: config.roomId }));
+    } catch {
+      // Non-fatal: diagnostics must never break the connection path.
+    }
 
     const timer = setTimeout(() => finish(false), config.timeoutMs);
 
