@@ -1,7 +1,6 @@
 import * as Y from "yjs";
 import { WebsocketProvider } from "y-websocket";
 import { makeAuthWebSocketClass } from "./collabSocket";
-import { diag } from "./diag";
 
 export interface CollabConnectConfig {
   wsUrl: string;
@@ -126,10 +125,7 @@ export function connectWithTimeout(
     const provider = deps.createProvider(config.wsUrl, config.roomId, doc, config.token);
     let settled = false;
 
-    const timer = setTimeout(() => {
-      diag("collab.sync-timeout", { roomId: config.roomId, timeoutMs: config.timeoutMs });
-      finish(false);
-    }, config.timeoutMs);
+    const timer = setTimeout(() => finish(false), config.timeoutMs);
 
     function finish(synced: boolean): void {
       if (settled) return;
@@ -140,16 +136,6 @@ export function connectWithTimeout(
         // fragment already holds content. See roomHasContent for why we test the
         // fragment directly rather than `doc.share.size` or a seed marker.
         const isNewRoom = !roomHasContent(doc);
-        // DIAGNOSTIC (blank-body bug): capture what the freshly-synced room
-        // actually holds. `bodyFragmentLen > 0` with `isNewRoom: false` on a
-        // reload that then paints blank is the "JOIN a contentful room that
-        // renders nothing" signal we're hunting.
-        diag("collab.synced", {
-          roomId: config.roomId,
-          isNewRoom,
-          bodyFragmentLen: doc.getXmlFragment(DOC_FRAGMENT).length,
-          shareKeys: Array.from(doc.share.keys()),
-        });
         resolve({ doc, provider: provider as unknown as WebsocketProvider, isNewRoom });
       } else {
         provider.destroy();
@@ -161,13 +147,7 @@ export function connectWithTimeout(
     provider.on("sync", (isSynced: boolean) => {
       if (isSynced) finish(true);
     });
-    provider.on("connection-error", () => {
-      diag("collab.connection-error", { roomId: config.roomId });
-      finish(false);
-    });
-    provider.on("connection-close", () => {
-      diag("collab.connection-close", { roomId: config.roomId });
-      finish(false);
-    });
+    provider.on("connection-error", () => finish(false));
+    provider.on("connection-close", () => finish(false));
   });
 }
