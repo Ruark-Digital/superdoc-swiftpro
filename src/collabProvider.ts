@@ -21,22 +21,62 @@ export interface CollabConnectConfig {
 export const DOC_FRAGMENT = "supereditor";
 
 /**
- * True when the synced room already holds document content, i.e. the
- * `"supereditor"` fragment has at least one child. Only then is JOINing safe;
- * an empty fragment must be (re-)seeded from the docx.
+ * True when the synced room already holds *renderable* document content in the
+ * `"supereditor"` body fragment. Only then is JOINing safe; anything else must
+ * be (re-)seeded from the docx.
  *
- * Why not a marker / `doc.share.size`: `upgradeToCollaboration` registers
+ * Why not `doc.share.size` or a seed marker: `upgradeToCollaboration` registers
  * SuperDoc's shared types and writes a `meta` bootstrap flag as part of seeding,
  * and any of those can reach the server independently of the (larger) body
- * fragment — a seed interrupted mid-flush, or a collab server that drops room
- * state, can leave the room with those side structures present but the body
- * empty. `doc.share.size === 0` and a "seeded" flag both misread that as
- * populated → JOIN → the blank page users saw on reload. Testing the body
- * fragment directly is the signal that matches what actually renders, and it
- * self-heals: an empty body always re-seeds from the docx the client still holds.
+ * fragment. `doc.share.size === 0` and a "seeded" flag both misread that as
+ * populated → JOIN → a blank page. Testing the body fragment is the signal that
+ * matches what actually renders.
+ *
+ * Why not a bare `length > 0`: a room can hold a body fragment that is
+ * non-empty yet paints nothing. The poison observed in production is a single
+ * empty `paragraph` node (`length === 1`, zero text) left by a bad seed from an
+ * older build. `length > 0` reads that as populated, so every client JOINs it,
+ * shows a permanently blank page, and never re-seeds — the exact "blank only
+ * after reload, forever" bug. So we look past the top-level count and ask
+ * whether the fragment holds any real content (see {@link fragmentHasContent}).
+ * An empty body — truly empty, or only empty paragraphs — reads as "needs
+ * seeding" and self-heals from the docx the client still holds; a body that
+ * carries text or a real element (image, table, a paragraph with children) is
+ * genuine content and is JOINed, so live edits from peers are never wiped.
  */
 export function roomHasContent(doc: Y.Doc): boolean {
-  return doc.getXmlFragment(DOC_FRAGMENT).length > 0;
+  return fragmentHasContent(doc.getXmlFragment(DOC_FRAGMENT));
+}
+
+/** One child of an XML fragment/element as returned by Yjs `toArray()`. */
+type YXmlChild = Y.XmlElement | Y.XmlText | Y.XmlHook;
+
+/**
+ * Whether an XML fragment holds any renderable content. Recurses because the
+ * poison (an empty paragraph) is a top-level element that is itself non-empty as
+ * a *node* but empty as *content*.
+ */
+export function fragmentHasContent(frag: Y.XmlFragment): boolean {
+  return frag.toArray().some(nodeHasContent);
+}
+
+/**
+ * Content test for a single node:
+ *  - non-empty text → content;
+ *  - any element that is not a `paragraph` (image, table, drawing, list, page
+ *    break, …) → content, since it renders something even without text;
+ *  - a `paragraph` → content only if a descendant has content (an *empty*
+ *    paragraph, the observed poison, does not);
+ *  - anything else (e.g. an embedded `Y.XmlHook`) → treated as content, so we
+ *    never wipe a structure we don't recognise.
+ */
+function nodeHasContent(node: YXmlChild): boolean {
+  if (node instanceof Y.XmlText) return node.length > 0;
+  if (node instanceof Y.XmlElement) {
+    if (node.nodeName && node.nodeName !== "paragraph") return true;
+    return node.toArray().some(nodeHasContent);
+  }
+  return true;
 }
 
 /** A synced collaboration handle, ready to hand to SuperDoc's collaboration module. */
@@ -44,10 +84,11 @@ export interface CollabHandle {
   doc: Y.Doc;
   provider: WebsocketProvider;
   /**
-   * True when the synced room's body fragment is empty — i.e. this client should
+   * True when the synced room's body fragment holds no renderable content —
+   * empty, or only empty paragraphs (a poisoned room). This client should then
    * SEED the room from the document via SuperDoc `upgradeToCollaboration`. When
-   * false, the room already holds document content and the caller should JOIN it
-   * (construction-time collaboration) rather than re-seed.
+   * false, the room already holds real document content and the caller should
+   * JOIN it (construction-time collaboration) rather than re-seed.
    */
   isNewRoom: boolean;
 }
