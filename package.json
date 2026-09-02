@@ -22,6 +22,7 @@
   },
   "dependencies": {
     "@harbour-enterprises/superdoc": "1.38.0",
+    "lib0": "^0.2.102",
     "y-websocket": "^3.0.0",
     "yjs": "^13.6.31"
   }
