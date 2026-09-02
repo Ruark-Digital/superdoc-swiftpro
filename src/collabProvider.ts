@@ -1,6 +1,7 @@
 import * as Y from "yjs";
 import { WebsocketProvider } from "y-websocket";
 import { makeAuthWebSocketClass } from "./collabSocket";
+import { registerCustomMessageHandlers, type CollabMessageHandlers } from "./collabMessages";
 import { diag } from "./diag";
 
 export interface CollabConnectConfig {
@@ -9,6 +10,12 @@ export interface CollabConnectConfig {
   token: string;
   /** Max time to wait for the first server sync before falling back. */
   timeoutMs: number;
+  /**
+   * Handlers for the backend's custom WebSocket messages (connected-clients,
+   * my-info, error). Registered on the provider as soon as it's created, so the
+   * server's error/presence frames are surfaced instead of dropped.
+   */
+  handlers?: CollabMessageHandlers;
 }
 
 /**
@@ -125,6 +132,13 @@ export function connectWithTimeout(
     const doc = new Y.Doc();
     const provider = deps.createProvider(config.wsUrl, config.roomId, doc, config.token);
     let settled = false;
+
+    // Decode the backend's custom messages (connected-clients, my-info, error)
+    // instead of letting y-websocket drop them as unknown types. Registered
+    // before the first frame can arrive.
+    if (config.handlers) {
+      registerCustomMessageHandlers(provider as unknown as { messageHandlers?: unknown }, config.handlers);
+    }
 
     // DIAGNOSTIC (live-collab bug): long-lived connection-lifecycle trace. These
     // listeners intentionally outlive the initial-sync settle below so a
