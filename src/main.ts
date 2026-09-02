@@ -29,6 +29,7 @@ import { hydrateImageMedia, type MediaEditorLike } from "./imageMedia";
 import { connectWithTimeout } from "./collabProvider";
 import { observePresence, type AwarenessLike } from "./presence";
 import { pickReadyTargets, resolveHostOrigins } from "./env";
+import { diag, editorBodySnapshot } from "./diag";
 import "./style.css";
 
 // Allowlist of host origins permitted to embed/drive this editor (one editor
@@ -139,6 +140,18 @@ async function handleInit(init: SuperdocInit): Promise<void> {
   if (initialized) return;
   initialized = true;
 
+  // DIAGNOSTIC (blank-body bug): what did the host actually hand us? An empty
+  // `docBytes` here would render blank in every path, so byteLength is the first
+  // thing to rule in or out.
+  diag("init", {
+    docBytesLen: init.payload.docBytes.byteLength,
+    fileName: init.payload.fileName,
+    hasCollab: hasCollabConfig(init.payload),
+    roomId: init.payload.roomId,
+    hasWsUrl: init.payload.wsUrl.length > 0,
+    documentMode: init.payload.documentMode,
+  });
+
   try {
     // Connect-or-fallback: sync a provider first (or null if unreachable).
     // Skip it entirely for a read-only preview, which carries no socket or
@@ -161,6 +174,13 @@ async function handleInit(init: SuperdocInit): Promise<void> {
     //  • No sync → document-only fallback.
     const joinExisting = collab !== null && !collab.isNewRoom;
 
+    // DIAGNOSTIC (blank-body bug): the branch we took. "join" on a reload that
+    // paints blank ⇒ JOIN hydration is the culprit; "seed" that paints then
+    // goes blank ⇒ upgradeToCollaboration is wiping the body.
+    diag("path", {
+      path: collab === null ? "document-only" : collab.isNewRoom ? "seed" : "join",
+    });
+
     new SuperDoc(
       buildSuperdocOptions(init.payload, {
         onPaginationUpdate: ({ totalPages }) => {
@@ -171,6 +191,9 @@ async function handleInit(init: SuperdocInit): Promise<void> {
           // tracked-change / selection events (fires before `onReady`).
           editorInstance = editor;
           wireEditorEvents(editor);
+          // DIAGNOSTIC (blank-body bug): body size at the moment the editor is
+          // created — the earliest "did content land" reading.
+          diag("editor.created", editorBodySnapshot(editor));
           // Back-fill image bytes from the local docx before first paint so a
           // join (whose Yjs "media" map may be empty/unsynced) still resolves
           // embedded images instead of 404-ing on the raw media path.
@@ -199,6 +222,24 @@ async function handleInit(init: SuperdocInit): Promise<void> {
           // Push the initial tracked-change set now that the document is loaded.
           pushRedlines();
 
+          // DIAGNOSTIC (blank-body bug): body size at ready. On a reload that
+          // paints blank this is the smoking gun — a "join" path (see the "path"
+          // trace) reaching ready with childCount 0 while `collab.synced`
+          // reported bodyFragmentLen > 0 proves the seeded room can't rehydrate.
+          diag("ready", {
+            path: collab === null ? "document-only" : collab.isNewRoom ? "seed" : "join",
+            body: editorBodySnapshot(editorInstance),
+          });
+          // And again shortly after, to tell a late/async hydration (recovers)
+          // apart from a permanent blank (stays 0) — and, on the seed path, to
+          // catch upgradeToCollaboration wiping the body it just seeded.
+          setTimeout(() => {
+            diag("ready.delayed", {
+              path: collab === null ? "document-only" : collab.isNewRoom ? "seed" : "join",
+              body: editorBodySnapshot(editorInstance),
+            });
+          }, 2500);
+
           // New (empty) room: now that the document is rendered, promote it into
           // collaboration — this authoritatively seeds the room from the docx we
           // just loaded and attaches the live provider in place. Runs AFTER
@@ -208,7 +249,18 @@ async function handleInit(init: SuperdocInit): Promise<void> {
           if (collab && collab.isNewRoom) {
             void superdoc
               .upgradeToCollaboration({ ydoc: collab.doc, provider: collab.provider })
+              .then(() => {
+                // DIAGNOSTIC: what the room's body fragment holds right after we
+                // seeded it, plus the body we still render. This is the exact
+                // state a later JOIN will try (and, per the bug, fail) to paint.
+                diag("seed.upgraded", {
+                  bodyFragmentLen: collab.doc.getXmlFragment("supereditor").length,
+                  shareKeys: Array.from(collab.doc.share.keys()),
+                  body: editorBodySnapshot(editorInstance),
+                });
+              })
               .catch((error) => {
+                diag("seed.upgrade-failed", { message: toMessage(error) });
                 if (import.meta.env.DEV) {
                   // eslint-disable-next-line no-console
                   console.warn("[collab] upgradeToCollaboration failed; staying document-only", error);
@@ -220,9 +272,11 @@ async function handleInit(init: SuperdocInit): Promise<void> {
           pingDocEdit();
         },
         onException: ({ error }) => {
+          diag("superdoc.exception", { message: toMessage(error) });
           reportError(toMessage(error));
         },
         onContentError: ({ error }) => {
+          diag("superdoc.content-error", { message: toMessage(error) });
           reportError(toMessage(error));
         },
       }, joinExisting ? collab : null),
@@ -255,6 +309,7 @@ async function handleInit(init: SuperdocInit): Promise<void> {
       stopPresence = observePresence(awareness, hostTarget());
     }
   } catch (err) {
+    diag("handleInit.threw", { message: toMessage(err) });
     reportError(toMessage(err));
   }
 }
