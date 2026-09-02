@@ -142,9 +142,19 @@ export function connectWithTimeout(
         if (status === "connecting" && settled) reconnects += 1;
         diag("collab.status", { roomId: config.roomId, status, reconnects });
       });
-      traced.on("connection-close", () =>
-        diag("collab.close", { roomId: config.roomId, reconnects }),
-      );
+      traced.on("connection-close", (event: unknown) => {
+        const e = event as { code?: number; reason?: string; wasClean?: boolean } | null;
+        // The close code/reason is the definitive "why the server dropped us"
+        // signal — 1000 (normal) vs 1006 (abnormal / rate-limit / proxy) vs a
+        // 4xxx policy/auth code — kept so a lingering loop is diagnosable.
+        diag("collab.close", {
+          roomId: config.roomId,
+          reconnects,
+          code: e?.code ?? null,
+          reason: e?.reason ?? "",
+          wasClean: e?.wasClean ?? null,
+        });
+      });
       traced.on("connection-error", () => diag("collab.error", { roomId: config.roomId }));
     } catch {
       // Non-fatal: diagnostics must never break the connection path.
