@@ -151,6 +151,21 @@ async function handleInit(init: SuperdocInit): Promise<void> {
           roomId: init.payload.roomId,
           token: init.payload.token,
           timeoutMs: COLLAB_SYNC_TIMEOUT_MS,
+          // Decode the backend's custom collab messages. An `error` frame is the
+          // server telling us it rejected something (e.g. an oversized seed)
+          // without closing the socket — surface it so it stops being silent.
+          // `connected-clients` and `my-info` are diagnostics for now; presence
+          // still flows from Yjs awareness (below).
+          handlers: {
+            onError: (message) => {
+              diag("collab.serverError", { roomId: init.payload.roomId, message });
+              reportError(message);
+            },
+            onConnectedClients: ({ count, names }) =>
+              diag("collab.connectedClients", { roomId: init.payload.roomId, count, names }),
+            onMyInfo: (name) =>
+              diag("collab.myInfo", { roomId: init.payload.roomId, name }),
+          },
         })
       : null;
 
