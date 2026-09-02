@@ -39,16 +39,96 @@ export function collabSubprotocols(
   return token ? ["access_token", token] : fallback;
 }
 
-/** A WebSocket subclass that applies the URL rewrite + auth subprotocol. Pass it
- *  to y-websocket as `WebSocketPolyfill`. */
+/**
+ * y-protocols message type for awareness updates — the first byte of every
+ * outbound Yjs frame. Mirrors y-websocket's `messageAwareness`. Doc-sync frames
+ * (type 0) and everything else are never throttled.
+ */
+export const MESSAGE_AWARENESS = 1;
+/** Coalesce awareness sends to ~30/s, matching the host's working client. */
+export const AWARENESS_THROTTLE_MS = Math.floor(1000 / 30);
+
+type WsPayload = Parameters<WebSocket["send"]>[0];
+
+/** First byte (the y-protocols message type) of an outbound WS payload, or -1. */
+export function messageType(data: unknown): number {
+  if (data instanceof Uint8Array) return data.length > 0 ? data[0] : -1;
+  if (data instanceof ArrayBuffer) {
+    const view = new Uint8Array(data);
+    return view.length > 0 ? view[0] : -1;
+  }
+  if (ArrayBuffer.isView(data)) {
+    const v = data as ArrayBufferView;
+    const view = new Uint8Array(v.buffer, v.byteOffset, v.byteLength);
+    return view.length > 0 ? view[0] : -1;
+  }
+  return -1;
+}
+
+/**
+ * Wrap a raw `send` so that outbound **awareness** frames are coalesced to one
+ * every {@link AWARENESS_THROTTLE_MS} (latest-wins, trailing-edge). Doc-sync and
+ * all other frames pass straight through, so edit latency is unaffected. Pure
+ * and dependency-injected (`isOpen`) so it is unit-testable without a WebSocket.
+ *
+ * This is the fix for the reconnect loop: without it, every awareness change
+ * (cursor moves, plus the full-state burst y-websocket sends on each connect)
+ * hits the server unthrottled, tripping SwiftPro's collab-server flood
+ * protection, which closes the socket. y-websocket reconnects, re-bursts, and is
+ * closed again — the endless `connected → close` loop that made presence avatars
+ * flicker and stopped edits/cursors from ever syncing between peers. The host's
+ * proven client (`useYooptaYjs.installAwarenessThrottle`) throttles the same way.
+ */
+export function makeThrottledSend(
+  rawSend: (data: WsPayload) => void,
+  isOpen: () => boolean,
+  intervalMs: number = AWARENESS_THROTTLE_MS,
+): (data: WsPayload) => void {
+  let pending: WsPayload | null = null;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  return (data: WsPayload) => {
+    if (messageType(data) !== MESSAGE_AWARENESS) {
+      rawSend(data);
+      return;
+    }
+    pending = data;
+    if (timer !== null) return;
+    timer = setTimeout(() => {
+      timer = null;
+      const next = pending;
+      pending = null;
+      if (next !== null && isOpen()) rawSend(next);
+    }, intervalMs);
+  };
+}
+
+/**
+ * A WebSocket subclass that applies the URL rewrite + auth subprotocol AND
+ * throttles outbound awareness frames (see {@link makeThrottledSend}). Baking
+ * the throttle into the socket means every reconnect's socket is covered
+ * automatically, with no per-`status` re-patch. Pass it to y-websocket as
+ * `WebSocketPolyfill`.
+ */
 export function makeAuthWebSocketClass(
   token: string | undefined,
   docName: string,
 ): typeof WebSocket {
   return class CollabAuthSocket extends WebSocket {
+    #throttledSend?: (data: WsPayload) => void;
+
     constructor(url: string | URL, protocols?: string | string[]) {
       const raw = typeof url === "string" ? url : url.toString();
       super(rewriteCollabUrl(raw, docName), collabSubprotocols(token, protocols));
+    }
+
+    send(data: WsPayload): void {
+      if (!this.#throttledSend) {
+        this.#throttledSend = makeThrottledSend(
+          (d) => WebSocket.prototype.send.call(this, d),
+          () => this.readyState === WebSocket.OPEN,
+        );
+      }
+      this.#throttledSend(data);
     }
   } as unknown as typeof WebSocket;
 }
