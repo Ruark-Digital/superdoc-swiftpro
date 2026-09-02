@@ -1,40 +1,41 @@
 /**
- * TEMPORARY diagnostics for the "blank document body" bug.
+ * TEMPORARY diagnostics for the live-collaboration bug.
  *
- * Symptom under investigation: the document body renders on first open but is
- * blank after a reload/rejoin, while comments and the toolbar still render and
- * the .docx itself fetches fine. Two prior fixes keyed the seed-vs-join decision
- * off the `supereditor` body fragment, yet the blank persists — so we need to
- * see, on a live reload, whether we JOIN a room whose body fragment reports
- * content but paints nothing, or whether the SEED/upgrade path wipes the body
- * that first-open already rendered.
+ * Symptom under investigation: with two users in the same room the presence
+ * avatars flicker, edits from one user don't reach the other, and the remote
+ * user's cursor never appears. All three ride the same Yjs channel (the shared
+ * doc + the provider's awareness), so the trace records that channel's health:
  *
- * This module emits a small, prefixed console trace of exactly those signals.
+ *   • connection lifecycle — status transitions, closes, errors, reconnects.
+ *     A reconnect loop clears and restores peers (flicker) and drops live
+ *     updates.
+ *   • awareness — peer count and names on every change. Rapid add/remove churn
+ *     is the flicker; a peer whose `user.name` keeps vanishing is why it drops
+ *     out of the relayed presence list.
+ *   • doc updates — whether a *remote*-origin update ever arrives. If only
+ *     local-origin updates are seen, the peers are effectively isolated (edits
+ *     never cross), which also means no remote cursor.
  *
- *   • Active by default in a browser, so the deployed "bug" build traces with no
- *     rebuild or env flag. It is intentionally low-volume (a handful of lines
- *     per load) — NOT a permanent logger. Remove once the blank path is found.
- *   • Silence it at runtime with `localStorage.setItem("superdoc:debug", "0")`
- *     (in the iframe's context) or the `?superdocDebug=0` query param.
- *   • Never runs outside a browser (no `window`), so unit tests stay silent.
+ * Active by default in a browser so the deployed build traces with no rebuild;
+ * silence with `localStorage.setItem("superdoc:debug","0")` or `?superdocDebug=0`.
+ * Never runs outside a browser (no `window`), so unit tests stay silent. Remove
+ * once the live-collaboration path is fixed.
  *
- * The trace is cross-origin-safe: Chrome/Edge DevTools shows iframe console
- * messages in the top frame's console by default. Filter on `superdoc-diag`.
+ * The trace is cross-origin-safe: DevTools shows iframe console messages in the
+ * top frame's console by default. Filter on `superdoc-collab`.
  */
 
-const PREFIX = "[superdoc-diag]";
+const PREFIX = "[superdoc-collab]";
 
 /** Whether the diagnostic trace should emit. Default ON in the browser. */
 export function isDiagEnabled(): boolean {
-  // No DOM (unit tests / SSR) → never trace.
   if (typeof window === "undefined") return false;
   try {
     const ls = window.localStorage?.getItem("superdoc:debug");
     if (ls === "0" || ls === "false") return false;
     if (ls === "1" || ls === "true") return true;
   } catch {
-    // localStorage can throw in a sandboxed/private context — ignore and fall
-    // through to the query-param / default checks.
+    // localStorage blocked (sandbox / private mode) — fall through.
   }
   try {
     const q = new URLSearchParams(window.location.search);
@@ -45,7 +46,7 @@ export function isDiagEnabled(): boolean {
   return true;
 }
 
-/** Emit one diagnostic line. No-op when disabled or when not in a browser. */
+/** Emit one diagnostic line. No-op when disabled or not in a browser. */
 export function diag(event: string, data?: Record<string, unknown>): void {
   if (!isDiagEnabled()) return;
   try {
@@ -56,37 +57,10 @@ export function diag(event: string, data?: Record<string, unknown>): void {
   }
 }
 
-/** Minimal ProseMirror-ish document shape we probe for a "did it paint" signal. */
-interface ProseMirrorDocLike {
-  content?: { size?: number };
-  childCount?: number;
-  textContent?: string;
-}
-
-interface EditorStateLike {
-  state?: { doc?: ProseMirrorDocLike };
-  view?: { state?: { doc?: ProseMirrorDocLike } };
-}
-
-/**
- * Snapshot the editor's *rendered* body so a blank page is visible in the trace:
- * a JOIN/seed that paints nothing shows `childCount: 0` / `textLen: 0` even
- * though the room's body fragment reported content. Fully defensive — any missing
- * accessor or throw resolves to `{ available: false }` rather than crashing.
- */
-export function editorBodySnapshot(editor: unknown): Record<string, unknown> {
-  const e = editor as EditorStateLike | null;
-  if (!e) return { available: false, reason: "no-editor" };
-  try {
-    const doc = e.state?.doc ?? e.view?.state?.doc;
-    if (!doc) return { available: false, reason: "no-doc" };
-    return {
-      available: true,
-      contentSize: doc.content?.size ?? null,
-      childCount: doc.childCount ?? null,
-      textLen: typeof doc.textContent === "string" ? doc.textContent.length : null,
-    };
-  } catch {
-    return { available: false, reason: "threw" };
-  }
+/** Describe a Yjs update origin for the trace (local edit vs remote provider). */
+export function describeOrigin(origin: unknown): string {
+  if (origin == null) return "null";
+  if (typeof origin === "string") return origin;
+  const ctor = (origin as { constructor?: { name?: string } })?.constructor?.name;
+  return ctor ?? typeof origin;
 }
