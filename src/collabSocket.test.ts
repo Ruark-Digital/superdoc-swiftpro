@@ -4,6 +4,7 @@ import {
   collabSubprotocols,
   makeThrottledSend,
   messageType,
+  payloadByteLength,
   rewriteCollabUrl,
 } from "./collabSocket";
 
@@ -51,6 +52,24 @@ describe("messageType", () => {
   it("returns -1 for empty or non-binary payloads", () => {
     expect(messageType(new Uint8Array([]))).toBe(-1);
     expect(messageType("text")).toBe(-1);
+  });
+});
+
+describe("payloadByteLength", () => {
+  it("sizes typed arrays, ArrayBuffers, and strings", () => {
+    expect(payloadByteLength(new Uint8Array(64))).toBe(64);
+    expect(payloadByteLength(new Uint8Array(10).buffer)).toBe(10);
+    expect(payloadByteLength("hello")).toBe(5);
+  });
+
+  it("sizes a Uint8Array view with an offset by its byteLength", () => {
+    const view = new Uint8Array(new ArrayBuffer(32), 8, 16);
+    expect(payloadByteLength(view)).toBe(16);
+  });
+
+  it("returns 0 for shapes it can't size", () => {
+    expect(payloadByteLength(undefined)).toBe(0);
+    expect(payloadByteLength(null)).toBe(0);
   });
 });
 

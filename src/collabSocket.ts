@@ -5,6 +5,8 @@
 //   • Auth: JWT via the `Sec-WebSocket-Protocol` subprotocol ["access_token", token].
 // If you change this, change it there too.
 
+import { diag } from "./diag";
+
 /** Rewrite a y-websocket-built URL to the backend's `/collab?doc=<room>` shape. */
 export function rewriteCollabUrl(raw: string, docName: string): string {
   try {
@@ -49,6 +51,24 @@ export const MESSAGE_AWARENESS = 1;
 export const AWARENESS_THROTTLE_MS = Math.floor(1000 / 30);
 
 type WsPayload = Parameters<WebSocket["send"]>[0];
+
+/** Byte length of an outbound WS payload (0 for shapes we can't size). */
+export function payloadByteLength(data: unknown): number {
+  if (typeof data === "string") return data.length;
+  if (data instanceof ArrayBuffer) return data.byteLength;
+  if (ArrayBuffer.isView(data)) return (data as ArrayBufferView).byteLength;
+  if (data instanceof Blob) return data.size;
+  return 0;
+}
+
+/**
+ * DIAGNOSTIC (message-too-large bug): outbound frames at/above this size are the
+ * suspects for the server's 1009 "Message too large" close. The initial
+ * document seed (whole doc + embedded image bytes, one Yjs sync frame) is the
+ * prime candidate; logging its exact size tells us whether the fix is
+ * externalising images / chunking (frame > server cap) or raising an edge limit.
+ */
+export const LARGE_FRAME_BYTES = 512 * 1024;
 
 /** First byte (the y-protocols message type) of an outbound WS payload, or -1. */
 export function messageType(data: unknown): number {
@@ -122,6 +142,12 @@ export function makeAuthWebSocketClass(
     }
 
     send(data: WsPayload): void {
+      // DIAGNOSTIC: measure large outbound frames — the seed frame that trips
+      // the server's 1009 close passes through here. type 0 = sync (the seed).
+      const bytes = payloadByteLength(data);
+      if (bytes >= LARGE_FRAME_BYTES) {
+        diag("collab.sendLarge", { type: messageType(data), bytes });
+      }
       if (!this.#throttledSend) {
         this.#throttledSend = makeThrottledSend(
           (d) => WebSocket.prototype.send.call(this, d),
