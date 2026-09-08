@@ -160,7 +160,8 @@ export type HostCommand =
   | { type: "superdoc:apply-redline"; payload: { redlineId: string; replacement: string } }
   | { type: "superdoc:focus-redline"; payload: { redlineId: string } }
   | { type: "superdoc:add-comment"; payload: { requestId: string; text: string } }
-  | { type: "superdoc:focus-comment"; payload: { commentId: string } };
+  | { type: "superdoc:focus-comment"; payload: { commentId: string } }
+  | { type: "superdoc:set-mode"; payload: { documentMode: DocumentMode } };
 
 export function parseHostCommand(event: MessageEvent, hostOrigins: string | string[]): HostCommand | null {
   if (!isAllowedOrigin(event.origin, hostOrigins)) return null;
@@ -186,6 +187,11 @@ export function parseHostCommand(event: MessageEvent, hostOrigins: string | stri
     const p = data.payload;
     if (!isObject(p) || typeof p.commentId !== "string" || p.commentId.length === 0) return null;
     return { type: "superdoc:focus-comment", payload: { commentId: p.commentId } };
+  }
+  if (data.type === "superdoc:set-mode") {
+    const p = data.payload;
+    if (!isObject(p) || !DOCUMENT_MODES.includes(p.documentMode as DocumentMode)) return null;
+    return { type: "superdoc:set-mode", payload: { documentMode: p.documentMode as DocumentMode } };
   }
   return null;
 }
