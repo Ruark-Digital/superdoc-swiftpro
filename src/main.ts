@@ -57,6 +57,8 @@ let docEditTimer: ReturnType<typeof setTimeout> | undefined;
 let superdocInstance: SuperDoc | null = null;
 /** Live editor instance, captured on create (drives tracked-change extraction). */
 let editorInstance: Editor | null = null;
+/** This viewer's identity, captured from init — authors the redline marks. */
+let redlineUser: { name: string; email: string } = { name: "", email: "" };
 /** Last tracked-change id we reported as clicked — dedupes selectionUpdate noise. */
 let lastClickedRedlineId: string | null = null;
 /** Last non-empty text selection — the anchor target for `add-comment`. */
@@ -110,13 +112,37 @@ function currentEditor(): Editor | null {
   return superdocInstance?.activeEditor ?? editorInstance;
 }
 
+// SuperDoc's tracked-change insertion mark; `editor.doc.trackChanges.list()`
+// reports a span carrying this mark as an "insert" (see redlines.ts).
+const TRACK_INSERT_MARK = "trackInsert";
+const TRACK_DELETE_MARK = "trackDelete";
+
 /**
- * Redline toolbar actions. In "suggesting" mode SuperDoc records every edit as a
- * tracked change, so these turn the current selection into a redline without the
- * user typing in the document:
- *  - delete → strike the highlighted text (tracked deletion).
- *  - insert → replace the highlighted text (or insert at the caret) with text the
- *    user enters (tracked deletion + insertion).
+ * Minimal structural view of the ProseMirror editor we drive for redline marks.
+ * Typed loosely so a SuperDoc minor bump doesn't break our typecheck.
+ */
+interface PmEditorLike {
+  commands?: { deleteSelection?: () => boolean };
+  view?: { dispatch?: (tr: unknown) => void };
+  state?: {
+    selection?: { from: number; to: number; empty?: boolean };
+    tr?: {
+      removeMark: (from: number, to: number, mark: unknown) => unknown;
+      addMark: (from: number, to: number, mark: unknown) => unknown;
+    };
+    schema?: { marks?: Record<string, { create?: (attrs: Record<string, unknown>) => unknown }> };
+  };
+}
+
+/**
+ * Redline toolbar actions. Both turn the highlighted selection into a tracked
+ * change the host's Redline panel picks up for recommendations:
+ *  - delete → SuperDoc's tracked delete (strikes the text).
+ *  - insert → apply the tracked-INSERT mark to the selection so it registers as
+ *    an insertion redline (mirrors delete; renders as inserted text). We mark the
+ *    existing selection rather than opening a prompt — the host iframe's sandbox
+ *    has no `allow-modals`, and the intent is to flag the selected text, not to
+ *    type new content.
  * SuperDoc focuses the active editor before running a toolbar command, so acting
  * on the live selection here is safe.
  */
@@ -128,13 +154,31 @@ function redlineDeleteSelection(): void {
 }
 
 function redlineInsertAtSelection(): void {
-  const editor = currentEditor() as unknown as {
-    commands?: { insertContent?: (value: string) => boolean };
-  } | null;
-  if (!editor) return;
-  const text = window.prompt("Insert as a tracked change:");
-  if (text == null || text === "") return;
-  editor.commands?.insertContent?.(text);
+  const editor = currentEditor() as unknown as PmEditorLike | null;
+  const state = editor?.state;
+  const dispatch = editor?.view?.dispatch;
+  if (!state?.selection || !state.tr || !dispatch) return;
+  const { from, to, empty } = state.selection;
+  if (empty || from === to) return; // nothing highlighted — nothing to mark.
+
+  const insertMarkType = state.schema?.marks?.[TRACK_INSERT_MARK];
+  const deleteMarkType = state.schema?.marks?.[TRACK_DELETE_MARK];
+  const insertionMark = insertMarkType?.create?.({
+    id: crypto.randomUUID(),
+    author: redlineUser.name || "",
+    authorId: "",
+    authorEmail: redlineUser.email || "",
+    authorImage: "",
+    date: new Date().toISOString(),
+  });
+  if (!insertionMark) return;
+
+  const tr = state.tr;
+  // Clear any deletion mark on the range first (mirrors SuperDoc's own
+  // markInsertion), then flag the selection as a tracked insertion.
+  if (deleteMarkType) tr.removeMark(from, to, deleteMarkType);
+  tr.addMark(from, to, insertionMark);
+  dispatch(tr);
 }
 
 // Inline-SVG icons for the custom toolbar buttons (SuperDoc renders the raw SVG
@@ -211,6 +255,7 @@ async function handleInit(init: SuperdocInit): Promise<void> {
   // The host should only init once; ignore duplicates rather than double-mount.
   if (initialized) return;
   initialized = true;
+  redlineUser = init.payload.user;
 
   try {
     // Connect-or-fallback: sync a provider first (or null if unreachable).
