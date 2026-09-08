@@ -107,10 +107,20 @@ function setDocumentMode(mode: DocumentMode): void {
     hasInstance: Boolean(superdocInstance),
   });
   superdocInstance?.setDocumentMode(mode);
-  console.log(
-    "[redline-debug] iframe documentMode now ->",
-    superdocInstance?.config?.documentMode,
-  );
+  // Measure what actually took effect. SuperDoc downgrades "suggesting" →
+  // "viewing" (read-only, toolbar disabled) when the role forbids it: at the
+  // SuperDoc level (config.role) or the editor level (editor.options.role ===
+  // "viewer"). isEditable is the true signal the toolbar reads.
+  const activeEditor = superdocInstance?.activeEditor as
+    | { isEditable?: boolean; options?: { role?: unknown; documentMode?: unknown } }
+    | undefined;
+  console.log("[redline-debug] iframe documentMode now ->", {
+    configDocumentMode: superdocInstance?.config?.documentMode,
+    editorDocumentMode: activeEditor?.options?.documentMode,
+    editorIsEditable: activeEditor?.isEditable,
+    superdocRole: superdocInstance?.config?.role,
+    editorRole: activeEditor?.options?.role,
+  });
 }
 
 /**
@@ -218,10 +228,15 @@ async function handleInit(init: SuperdocInit): Promise<void> {
         },
         onReady: ({ superdoc }) => {
           superdocInstance = superdoc;
-          console.log(
-            "[redline-debug] iframe onReady — active documentMode ->",
-            superdoc.config?.documentMode,
-          );
+          const readyEditor = superdoc.activeEditor as
+            | { isEditable?: boolean; options?: { role?: unknown } }
+            | undefined;
+          console.log("[redline-debug] iframe onReady", {
+            configDocumentMode: superdoc.config?.documentMode,
+            editorIsEditable: readyEditor?.isEditable,
+            superdocRole: superdoc.config?.role,
+            editorRole: readyEditor?.options?.role,
+          });
           // Fallback: if `onEditorCreate` did not fire (older runtime paths),
           // grab the active editor off the ready instance.
           if (!editorInstance && superdoc.activeEditor) {
