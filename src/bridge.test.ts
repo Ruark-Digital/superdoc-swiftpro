@@ -260,6 +260,32 @@ describe("anchored-comment bridge messages", () => {
   it("rejects superdoc:focus-comment without a commentId", () => {
     expect(parseHostCommand(msg(HOST, { type: "superdoc:focus-comment", payload: {} }), HOST)).toBeNull();
   });
+});
+
+describe("set-mode bridge command (turn-based redline editability)", () => {
+  // Without this the host's mode flip is dropped: the editor stays in its
+  // init-time mode and the tracked-change toolbar buttons never enable when it
+  // becomes this user's turn.
+  it("parses superdoc:set-mode for each valid document mode", () => {
+    for (const documentMode of ["editing", "viewing", "suggesting"] as const) {
+      expect(
+        parseHostCommand(msg(HOST, { type: "superdoc:set-mode", payload: { documentMode } }), HOST),
+      ).toEqual({ type: "superdoc:set-mode", payload: { documentMode } });
+    }
+  });
+
+  it("rejects superdoc:set-mode with a missing or unknown mode", () => {
+    expect(parseHostCommand(msg(HOST, { type: "superdoc:set-mode", payload: {} }), HOST)).toBeNull();
+    expect(
+      parseHostCommand(msg(HOST, { type: "superdoc:set-mode", payload: { documentMode: "bogus" } }), HOST),
+    ).toBeNull();
+  });
+
+  it("rejects superdoc:set-mode from a foreign origin", () => {
+    expect(
+      parseHostCommand(msg(EVIL, { type: "superdoc:set-mode", payload: { documentMode: "suggesting" } }), HOST),
+    ).toBeNull();
+  });
 
   it("builds selection and comment-created messages", () => {
     expect(buildSelectionState(true, "quoted text")).toEqual({
