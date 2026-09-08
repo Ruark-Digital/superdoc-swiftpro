@@ -5,6 +5,23 @@ import type { CollabHandle } from "./collabProvider";
 const DOCX_MIME =
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
+/** A custom SuperDoc toolbar button. SuperDoc runs `command` when clicked
+ *  (its toolbar dispatches a function `command` directly), after focusing the
+ *  active editor — so the handler can act on the current selection. `icon` is a
+ *  raw inline SVG string, matching SuperDoc's built-in toolbar icons. */
+export interface RedlineToolbarButton {
+  type: "button";
+  name: string;
+  icon: string;
+  tooltip: string;
+  group?: string;
+  command: () => void;
+  attributes?: Record<string, unknown>;
+  // SuperDoc types customButtons as Record<string, unknown>[]; this index
+  // signature keeps the concrete shape while staying assignable to that.
+  [key: string]: unknown;
+}
+
 /** Lifecycle callbacks main.ts wires into SuperDoc (kept here so the options
  *  builder stays pure and unit-testable without a DOM or SuperDoc instance). */
 export interface SuperdocHandlers {
@@ -34,6 +51,7 @@ export function buildSuperdocOptions(
   payload: SuperdocInit["payload"],
   handlers: SuperdocHandlers,
   collab?: CollabHandle | null,
+  redlineButtons: RedlineToolbarButton[] = [],
 ) {
   return {
     selector: "#editor",
@@ -46,7 +64,10 @@ export function buildSuperdocOptions(
       // the toolbar's right end). The host controls the mode; SwiftPro's own
       // Redline/Comments sidebar is the editing-mode surface. `selector` falls
       // back to the top-level `toolbar` above.
-      toolbar: { excludeItems: ["documentMode"] },
+      // `customButtons` adds our Insert/Delete redline actions so a user can
+      // turn a highlighted selection into a tracked change from the toolbar
+      // (SuperDoc spreads this whole object into its SuperToolbar config).
+      toolbar: { excludeItems: ["documentMode"], customButtons: redlineButtons },
       // Comment marks/highlights for host-anchored comments. The built-in
       // comments list UI stays unmounted (we never call addCommentsList) —
       // the host panel is the only comment UI.

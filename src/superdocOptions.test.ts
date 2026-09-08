@@ -37,6 +37,27 @@ describe("buildSuperdocOptions", () => {
     expect(opts.modules?.toolbar?.excludeItems).toContain("documentMode");
   });
 
+  it("passes redline custom toolbar buttons through to modules.toolbar", () => {
+    const buttons = [
+      { type: "button" as const, name: "redlineInsert", icon: "<svg/>", tooltip: "Insert", command: () => {} },
+      { type: "button" as const, name: "redlineDelete", icon: "<svg/>", tooltip: "Delete", command: () => {} },
+    ];
+    const opts = buildSuperdocOptions(payload, handlers, null, buttons) as {
+      modules?: { toolbar?: { customButtons?: { name: string }[] } };
+    };
+    expect(opts.modules?.toolbar?.customButtons?.map((b) => b.name)).toEqual([
+      "redlineInsert",
+      "redlineDelete",
+    ]);
+  });
+
+  it("defaults to no custom toolbar buttons when none are given", () => {
+    const opts = buildSuperdocOptions(payload, handlers) as {
+      modules?: { toolbar?: { customButtons?: unknown[] } };
+    };
+    expect(opts.modules?.toolbar?.customButtons).toEqual([]);
+  });
+
   it("enables the comments module (anchors for host-panel comments)", () => {
     const opts = buildSuperdocOptions(payload, handlers) as {
       modules?: { comments?: unknown };
