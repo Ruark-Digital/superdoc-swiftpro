@@ -168,6 +168,35 @@ body {
   font-size: 18px;
 }
 
+/*
+ * Toolbar tooltip placement. SuperDoc positions toolbar tooltips ABOVE the
+ * trigger with no flip (top = triggerRect.top - height - 10). Our toolbar is
+ * pinned to the very top of the iframe, so those tooltips render off the top
+ * edge and read as "stuck under the host header". The toolbar is a single
+ * ~46px row, so clamp toolbar tooltips to just below it. The library sets `top`
+ * as an inline style without !important, so this override wins; the arrow
+ * assumes an above-placement, so hide it to avoid a misplaced point.
+ */
+.sd-tooltip-content.sd-editor-toolbar-tooltip {
+  top: 52px !important;
+}
+.sd-tooltip-content.sd-editor-toolbar-tooltip .tooltip-arrow {
+  display: none !important;
+}
+
+/*
+ * Never let the toolbar force a page-wide horizontal scrollbar. SuperDoc's
+ * `responsiveToContainer` collapses overflowing items into the ⋮ menu; this is
+ * the belt-and-suspenders clip for any residual width.
+ */
+html,
+body {
+  overflow-x: hidden;
+}
+#superdoc-toolbar {
+  max-width: 100%;
+}
+
 /* AGPL §13 source-offer link — present but out of the way. */
 .agpl-source-link {
   position: fixed;

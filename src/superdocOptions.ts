@@ -67,7 +67,14 @@ export function buildSuperdocOptions(
       // `customButtons` adds our Insert/Delete redline actions so a user can
       // turn a highlighted selection into a tracked change from the toolbar
       // (SuperDoc spreads this whole object into its SuperToolbar config).
-      toolbar: { excludeItems: ["documentMode"], customButtons: redlineButtons },
+      // `responsiveToContainer` lets the toolbar collapse items into its overflow
+      // (⋮) menu when they don't fit, instead of overflowing the iframe width and
+      // forcing a horizontal scrollbar (the two extra buttons tipped it over).
+      toolbar: {
+        excludeItems: ["documentMode"],
+        customButtons: redlineButtons,
+        responsiveToContainer: true,
+      },
       // Comment marks/highlights for host-anchored comments. The built-in
       // comments list UI stays unmounted (we never call addCommentsList) —
       // the host panel is the only comment UI.
