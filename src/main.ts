@@ -9,6 +9,7 @@ import {
   parseHostCommand,
   parseHostMessage,
   postToHost,
+  type DocumentMode,
   type SuperdocInit,
 } from "./bridge";
 import {
@@ -92,6 +93,16 @@ function pingDocEdit(): void {
 /** Re-extract the document's tracked changes and push the full set to the host. */
 function pushRedlines(): void {
   postToHost(buildRedlines(extractRedlines(editorInstance)), hostTarget());
+}
+
+/**
+ * Switch the live document mode after load. SuperDoc gates editability (and the
+ * tracked-change toolbar buttons) on this mode; construction only sets it once,
+ * so a turn-based host that flips "viewing" → "suggesting" must reach us here.
+ * No-ops until the SuperDoc instance is ready.
+ */
+function setDocumentMode(mode: DocumentMode): void {
+  superdocInstance?.setDocumentMode(mode);
 }
 
 /**
@@ -363,6 +374,13 @@ window.addEventListener("message", (event) => {
     }
     case "superdoc:focus-comment":
       focusComment(superdocInstance, cmd.payload.commentId);
+      break;
+    case "superdoc:set-mode":
+      // Turn-based redline negotiation: the host flips the live edit permission
+      // after load (e.g. "viewing" → "suggesting" when it becomes this user's
+      // turn) so the tracked-change toolbar buttons enable. Without this the
+      // mode is frozen at whatever `superdoc:init` carried.
+      setDocumentMode(cmd.payload.documentMode);
       break;
   }
 });
