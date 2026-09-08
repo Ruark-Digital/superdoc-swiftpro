@@ -102,7 +102,15 @@ function pushRedlines(): void {
  * No-ops until the SuperDoc instance is ready.
  */
 function setDocumentMode(mode: DocumentMode): void {
+  console.log("[redline-debug] iframe setDocumentMode called", {
+    mode,
+    hasInstance: Boolean(superdocInstance),
+  });
   superdocInstance?.setDocumentMode(mode);
+  console.log(
+    "[redline-debug] iframe documentMode now ->",
+    superdocInstance?.config?.documentMode,
+  );
 }
 
 /**
@@ -150,6 +158,11 @@ async function handleInit(init: SuperdocInit): Promise<void> {
   // The host should only init once; ignore duplicates rather than double-mount.
   if (initialized) return;
   initialized = true;
+
+  // [redline-debug] The edit permission the host requested at construction.
+  // "suggesting" = editable + tracked (redline buttons active); "viewing" =
+  // read-only; "editing" = editable but changes NOT tracked.
+  console.log("[redline-debug] iframe handleInit documentMode ->", init.payload.documentMode);
 
   try {
     // Connect-or-fallback: sync a provider first (or null if unreachable).
@@ -205,6 +218,10 @@ async function handleInit(init: SuperdocInit): Promise<void> {
         },
         onReady: ({ superdoc }) => {
           superdocInstance = superdoc;
+          console.log(
+            "[redline-debug] iframe onReady — active documentMode ->",
+            superdoc.config?.documentMode,
+          );
           // Fallback: if `onEditorCreate` did not fire (older runtime paths),
           // grab the active editor off the ready instance.
           if (!editorInstance && superdoc.activeEditor) {
@@ -376,6 +393,7 @@ window.addEventListener("message", (event) => {
       focusComment(superdocInstance, cmd.payload.commentId);
       break;
     case "superdoc:set-mode":
+      console.log("[redline-debug] iframe received superdoc:set-mode ->", cmd.payload.documentMode);
       // Turn-based redline negotiation: the host flips the live edit permission
       // after load (e.g. "viewing" → "suggesting" when it becomes this user's
       // turn) so the tracked-change toolbar buttons enable. Without this the
