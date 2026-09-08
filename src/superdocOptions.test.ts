@@ -65,6 +65,13 @@ describe("buildSuperdocOptions", () => {
     expect(opts.modules?.toolbar?.customButtons).toEqual([]);
   });
 
+  it("keeps tracked changes visible so viewing mode doesn't hide redlines", () => {
+    const opts = buildSuperdocOptions(payload, handlers) as {
+      modules?: { trackChanges?: { visible?: boolean } };
+    };
+    expect(opts.modules?.trackChanges?.visible).toBe(true);
+  });
+
   it("enables the comments module (anchors for host-panel comments)", () => {
     const opts = buildSuperdocOptions(payload, handlers) as {
       modules?: { comments?: unknown };
