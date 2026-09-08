@@ -110,13 +110,17 @@ function currentEditor(): Editor | null {
   return superdocInstance?.activeEditor ?? editorInstance;
 }
 
+/** Placeholder dropped in by the Insert button; the user types over it. */
+const INSERT_PLACEHOLDER = "[insert text]";
+
 /**
  * Redline toolbar actions. In "suggesting" mode SuperDoc records every edit as a
- * tracked change, so these turn the current selection into a redline without the
- * user typing in the document:
+ * tracked change, so these turn the current selection into a redline:
  *  - delete → strike the highlighted text (tracked deletion).
- *  - insert → replace the highlighted text (or insert at the caret) with text the
- *    user enters (tracked deletion + insertion).
+ *  - insert → drop an editable placeholder (tracked insertion) at the selection
+ *    and select it, so the user can immediately type their replacement. We can't
+ *    open a prompt() — the host iframe's sandbox has no `allow-modals`, so a
+ *    prompt is silently blocked — hence the inline placeholder.
  * SuperDoc focuses the active editor before running a toolbar command, so acting
  * on the live selection here is safe.
  */
@@ -129,12 +133,20 @@ function redlineDeleteSelection(): void {
 
 function redlineInsertAtSelection(): void {
   const editor = currentEditor() as unknown as {
-    commands?: { insertContent?: (value: string) => boolean };
+    state?: { selection?: { from?: number } };
+    commands?: {
+      focus?: () => boolean;
+      insertContent?: (value: string) => boolean;
+      setTextSelection?: (range: { from: number; to: number }) => boolean;
+    };
   } | null;
-  if (!editor) return;
-  const text = window.prompt("Insert as a tracked change:");
-  if (text == null || text === "") return;
-  editor.commands?.insertContent?.(text);
+  if (!editor?.commands?.insertContent) return;
+  // Start of the (possibly empty) selection — where the inserted content lands.
+  const from = editor.state?.selection?.from ?? 0;
+  editor.commands.focus?.();
+  editor.commands.insertContent(INSERT_PLACEHOLDER);
+  // Select the placeholder so typing replaces it in one go.
+  editor.commands.setTextSelection?.({ from, to: from + INSERT_PLACEHOLDER.length });
 }
 
 // Inline-SVG icons for the custom toolbar buttons (SuperDoc renders the raw SVG

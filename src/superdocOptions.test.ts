@@ -51,6 +51,13 @@ describe("buildSuperdocOptions", () => {
     ]);
   });
 
+  it("makes the toolbar responsive so extra buttons collapse instead of overflowing", () => {
+    const opts = buildSuperdocOptions(payload, handlers) as {
+      modules?: { toolbar?: { responsiveToContainer?: boolean } };
+    };
+    expect(opts.modules?.toolbar?.responsiveToContainer).toBe(true);
+  });
+
   it("defaults to no custom toolbar buttons when none are given", () => {
     const opts = buildSuperdocOptions(payload, handlers) as {
       modules?: { toolbar?: { customButtons?: unknown[] } };
