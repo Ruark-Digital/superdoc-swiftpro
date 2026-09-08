@@ -75,6 +75,13 @@ export function buildSuperdocOptions(
         customButtons: redlineButtons,
         responsiveToContainer: true,
       },
+      // Keep tracked changes VISIBLE at all times, including "viewing" mode.
+      // When it becomes the other side's turn, the host flips this editor to
+      // "viewing"; by default SuperDoc then renders the "original" (clean) text
+      // and the redline highlights vanish — the waiting user feels like their
+      // suggestions were lost. `visible: true` forces "review" rendering in
+      // viewing mode so the insertion/deletion highlights stay on screen.
+      trackChanges: { visible: true },
       // Comment marks/highlights for host-anchored comments. The built-in
       // comments list UI stays unmounted (we never call addCommentsList) —
       // the host panel is the only comment UI.
