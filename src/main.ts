@@ -25,7 +25,7 @@ import {
   type CapturedSelection,
 } from "./comments";
 import { installFindBar, type SearchEditor } from "./search";
-import { buildSuperdocOptions } from "./superdocOptions";
+import { buildSuperdocOptions, type RedlineToolbarButton } from "./superdocOptions";
 import { hydrateImageMedia, type MediaEditorLike } from "./imageMedia";
 import { connectWithTimeout } from "./collabProvider";
 import { observePresence, type AwarenessLike } from "./presence";
@@ -102,26 +102,69 @@ function pushRedlines(): void {
  * No-ops until the SuperDoc instance is ready.
  */
 function setDocumentMode(mode: DocumentMode): void {
-  console.log("[redline-debug] iframe setDocumentMode called", {
-    mode,
-    hasInstance: Boolean(superdocInstance),
-  });
   superdocInstance?.setDocumentMode(mode);
-  // Measure what actually took effect. SuperDoc downgrades "suggesting" →
-  // "viewing" (read-only, toolbar disabled) when the role forbids it: at the
-  // SuperDoc level (config.role) or the editor level (editor.options.role ===
-  // "viewer"). isEditable is the true signal the toolbar reads.
-  const activeEditor = superdocInstance?.activeEditor as
-    | { isEditable?: boolean; options?: { role?: unknown; documentMode?: unknown } }
-    | undefined;
-  console.log("[redline-debug] iframe documentMode now ->", {
-    configDocumentMode: superdocInstance?.config?.documentMode,
-    editorDocumentMode: activeEditor?.options?.documentMode,
-    editorIsEditable: activeEditor?.isEditable,
-    superdocRole: superdocInstance?.config?.role,
-    editorRole: activeEditor?.options?.role,
-  });
 }
+
+/** The editor currently driving the toolbar (falls back to the captured one). */
+function currentEditor(): Editor | null {
+  return superdocInstance?.activeEditor ?? editorInstance;
+}
+
+/**
+ * Redline toolbar actions. In "suggesting" mode SuperDoc records every edit as a
+ * tracked change, so these turn the current selection into a redline without the
+ * user typing in the document:
+ *  - delete → strike the highlighted text (tracked deletion).
+ *  - insert → replace the highlighted text (or insert at the caret) with text the
+ *    user enters (tracked deletion + insertion).
+ * SuperDoc focuses the active editor before running a toolbar command, so acting
+ * on the live selection here is safe.
+ */
+function redlineDeleteSelection(): void {
+  const editor = currentEditor() as unknown as {
+    commands?: { deleteSelection?: () => boolean };
+  } | null;
+  editor?.commands?.deleteSelection?.();
+}
+
+function redlineInsertAtSelection(): void {
+  const editor = currentEditor() as unknown as {
+    commands?: { insertContent?: (value: string) => boolean };
+  } | null;
+  if (!editor) return;
+  const text = window.prompt("Insert as a tracked change:");
+  if (text == null || text === "") return;
+  editor.commands?.insertContent?.(text);
+}
+
+// Inline-SVG icons for the custom toolbar buttons (SuperDoc renders the raw SVG
+// string, matching its built-in icons). Kept minimal and theme-neutral.
+const INSERT_ICON =
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><path d="M256 80c0-17.7-14.3-32-32-32s-32 14.3-32 32l0 144L48 224c-17.7 0-32 14.3-32 32s14.3 32 32 32l144 0 0 144c0 17.7 14.3 32 32 32s32-14.3 32-32l0-144 144 0c17.7 0 32-14.3 32-32s-14.3-32-32-32l-144 0 0-144z"/></svg>';
+const DELETE_ICON =
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><path d="M108.5 96C129.9 68.9 168 32 256 32c88 0 126.1 36.9 147.5 64l4.5 0c17.7 0 32 14.3 32 32s-14.3 32-32 32L104 160c-17.7 0-32-14.3-32-32s14.3-32 32-32l4.5 0zM256 256l128 0c17.7 0 32 14.3 32 32s-14.3 32-32 32l-128 0-128 0c-17.7 0-32-14.3-32-32s14.3-32 32-32l128 0z"/></svg>';
+
+/** The Insert / Delete redline buttons injected into the SuperDoc toolbar. */
+const redlineToolbarButtons: RedlineToolbarButton[] = [
+  {
+    type: "button",
+    name: "redlineInsert",
+    icon: INSERT_ICON,
+    tooltip: "Insert (tracked change)",
+    group: "center",
+    command: redlineInsertAtSelection,
+    attributes: { ariaLabel: "Insert as tracked change" },
+  },
+  {
+    type: "button",
+    name: "redlineDelete",
+    icon: DELETE_ICON,
+    tooltip: "Delete (tracked change)",
+    group: "center",
+    command: redlineDeleteSelection,
+    attributes: { ariaLabel: "Delete selection as tracked change" },
+  },
+];
 
 /**
  * Debounced relay of selection state to the host (drives the "anchored to"
@@ -169,11 +212,6 @@ async function handleInit(init: SuperdocInit): Promise<void> {
   if (initialized) return;
   initialized = true;
 
-  // [redline-debug] The edit permission the host requested at construction.
-  // "suggesting" = editable + tracked (redline buttons active); "viewing" =
-  // read-only; "editing" = editable but changes NOT tracked.
-  console.log("[redline-debug] iframe handleInit documentMode ->", init.payload.documentMode);
-
   try {
     // Connect-or-fallback: sync a provider first (or null if unreachable).
     // Skip it entirely for a read-only preview, which carries no socket or
@@ -212,7 +250,9 @@ async function handleInit(init: SuperdocInit): Promise<void> {
     const joinExisting = collab !== null && !collab.isNewRoom;
 
     new SuperDoc(
-      buildSuperdocOptions(init.payload, {
+      buildSuperdocOptions(
+        init.payload,
+        {
         onPaginationUpdate: ({ totalPages }) => {
           latestPageCount = totalPages;
         },
@@ -228,15 +268,6 @@ async function handleInit(init: SuperdocInit): Promise<void> {
         },
         onReady: ({ superdoc }) => {
           superdocInstance = superdoc;
-          const readyEditor = superdoc.activeEditor as
-            | { isEditable?: boolean; options?: { role?: unknown } }
-            | undefined;
-          console.log("[redline-debug] iframe onReady", {
-            configDocumentMode: superdoc.config?.documentMode,
-            editorIsEditable: readyEditor?.isEditable,
-            superdocRole: superdoc.config?.role,
-            editorRole: readyEditor?.options?.role,
-          });
           // Fallback: if `onEditorCreate` did not fire (older runtime paths),
           // grab the active editor off the ready instance.
           if (!editorInstance && superdoc.activeEditor) {
@@ -284,7 +315,10 @@ async function handleInit(init: SuperdocInit): Promise<void> {
         onContentError: ({ error }) => {
           reportError(toMessage(error));
         },
-      }, joinExisting ? collab : null),
+        },
+        joinExisting ? collab : null,
+        redlineToolbarButtons,
+      ),
     );
 
     // Relay room presence (Yjs awareness) to the host so it can render the
@@ -408,7 +442,6 @@ window.addEventListener("message", (event) => {
       focusComment(superdocInstance, cmd.payload.commentId);
       break;
     case "superdoc:set-mode":
-      console.log("[redline-debug] iframe received superdoc:set-mode ->", cmd.payload.documentMode);
       // Turn-based redline negotiation: the host flips the live edit permission
       // after load (e.g. "viewing" → "suggesting" when it becomes this user's
       // turn) so the tracked-change toolbar buttons enable. Without this the
