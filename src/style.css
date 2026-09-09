@@ -101,6 +101,23 @@ body {
 }
 
 /*
+ * When the container is narrower than the page (a phone, or a narrow editor
+ * column on desktop), centering a ~816px page pushes its left edge into
+ * unreachable negative scroll — the leading text gets clipped and can't be
+ * scrolled back to. Below the page width, left-align instead so the whole page
+ * is reachable by horizontal scroll with the left edge visible at rest.
+ */
+@media (max-width: 850px) {
+  .superdoc {
+    justify-content: flex-start !important;
+  }
+  .superdoc__layers {
+    margin-left: 0 !important;
+    margin-right: auto !important;
+  }
+}
+
+/*
  * Find bar (Ctrl/Cmd-F) — QA #231. A small floating toolbar pinned top-right,
  * above the document. Driven by src/search.ts via SuperDoc's search commands.
  */
