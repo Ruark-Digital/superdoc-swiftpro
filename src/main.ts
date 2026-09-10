@@ -1,7 +1,9 @@
 import { SuperDoc, type Editor } from "@harbour-enterprises/superdoc";
+import type * as Y from "yjs";
 import "@harbour-enterprises/superdoc/style.css";
 import {
   buildCommentCreated,
+  buildDocumentState,
   buildRedlineClicked,
   buildRedlines,
   buildSelectionState,
@@ -27,7 +29,7 @@ import {
 import { installFindBar, type SearchEditor } from "./search";
 import { buildSuperdocOptions, type RedlineToolbarButton } from "./superdocOptions";
 import { hydrateImageMedia, type MediaEditorLike } from "./imageMedia";
-import { connectWithTimeout } from "./collabProvider";
+import { connectWithTimeout, encodeDocumentState } from "./collabProvider";
 import { observePresence, type AwarenessLike } from "./presence";
 import { pickReadyTargets, resolveHostOrigins } from "./env";
 import { diag, describeOrigin } from "./diag";
@@ -69,6 +71,10 @@ let lastSelectionSignal = "";
 const SELECTION_DEBOUNCE_MS = 250;
 /** Unsubscribe for the awareness→host presence relay (set once collab connects). */
 let stopPresence: (() => void) | null = null;
+/** The live collaboration Y.Doc, once connected — the source the host reads for
+ *  the redline `documentState` snapshot. `null` in document-only fallback (no
+ *  shared doc to persist), which makes `get-document-state` reply `state: null`. */
+let collabDoc: Y.Doc | null = null;
 
 function reportError(message: string): void {
   postToHost({ type: "superdoc:error", payload: { message } }, hostTarget());
@@ -286,6 +292,11 @@ async function handleInit(init: SuperdocInit): Promise<void> {
         })
       : null;
 
+    // Expose the shared Y.Doc for on-demand `documentState` snapshots (the host
+    // reads it when persisting an accepted redline). Both the SEED and JOIN
+    // paths use `collab.doc`; document-only leaves it null.
+    collabDoc = collab?.doc ?? null;
+
     // Seed vs join (see CollabHandle.isNewRoom):
     //  • Empty room  → render document-only from the bytes, then SEED the room
     //    via `upgradeToCollaboration` in onReady (below). Construction-time
@@ -493,6 +504,17 @@ window.addEventListener("message", (event) => {
       // mode is frozen at whatever `superdoc:init` carried.
       setDocumentMode(cmd.payload.documentMode);
       break;
+    case "superdoc:get-document-state": {
+      // The host persists the accepted document to the BE via the redline
+      // `resolve`/`batch-resolve` `documentState` field, but the Y.Doc lives
+      // here, not host-side. It sends this right after an `apply-redline`;
+      // postMessages are delivered in order and each handler runs to completion,
+      // so the apply has already landed in the doc by the time we encode. No
+      // live doc (document-only) → `state: null`, and the host omits the field.
+      const state = collabDoc ? encodeDocumentState(collabDoc) : null;
+      postToHost(buildDocumentState(cmd.payload.requestId, state), hostTarget());
+      break;
+    }
   }
 });
 

@@ -68,7 +68,8 @@ export type SuperdocOutbound =
   | { type: "superdoc:redline-clicked"; payload: { redlineId: string } }
   | { type: "superdoc:presence"; payload: { users: PresenceUser[] } }
   | { type: "superdoc:selection"; payload: { hasSelection: boolean; excerpt: string } }
-  | { type: "superdoc:comment-created"; payload: { requestId: string; commentId: string | null } };
+  | { type: "superdoc:comment-created"; payload: { requestId: string; commentId: string | null } }
+  | { type: "superdoc:document-state"; payload: { requestId: string; state: string | null } };
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -161,7 +162,8 @@ export type HostCommand =
   | { type: "superdoc:focus-redline"; payload: { redlineId: string } }
   | { type: "superdoc:add-comment"; payload: { requestId: string; text: string } }
   | { type: "superdoc:focus-comment"; payload: { commentId: string } }
-  | { type: "superdoc:set-mode"; payload: { documentMode: DocumentMode } };
+  | { type: "superdoc:set-mode"; payload: { documentMode: DocumentMode } }
+  | { type: "superdoc:get-document-state"; payload: { requestId: string } };
 
 export function parseHostCommand(event: MessageEvent, hostOrigins: string | string[]): HostCommand | null {
   if (!isAllowedOrigin(event.origin, hostOrigins)) return null;
@@ -193,6 +195,11 @@ export function parseHostCommand(event: MessageEvent, hostOrigins: string | stri
     if (!isObject(p) || !DOCUMENT_MODES.includes(p.documentMode as DocumentMode)) return null;
     return { type: "superdoc:set-mode", payload: { documentMode: p.documentMode as DocumentMode } };
   }
+  if (data.type === "superdoc:get-document-state") {
+    const p = data.payload;
+    if (!isObject(p) || typeof p.requestId !== "string" || p.requestId.length === 0) return null;
+    return { type: "superdoc:get-document-state", payload: { requestId: p.requestId } };
+  }
   return null;
 }
 
@@ -216,6 +223,16 @@ export function buildSelectionState(hasSelection: boolean, excerpt: string): Sup
 /** Reply to `superdoc:add-comment`; `commentId: null` = anchoring failed. */
 export function buildCommentCreated(requestId: string, commentId: string | null): SuperdocOutbound {
   return { type: "superdoc:comment-created", payload: { requestId, commentId } };
+}
+
+/**
+ * Reply to `superdoc:get-document-state`. `state` is `base64(Y.encodeStateAsUpdate(ydoc))`
+ * — the full Yjs document state the host persists via the redline
+ * `resolve`/`batch-resolve` `documentState` field. `state: null` means there is
+ * no live Y.Doc (document-only fallback), so the host omits `documentState`.
+ */
+export function buildDocumentState(requestId: string, state: string | null): SuperdocOutbound {
+  return { type: "superdoc:document-state", payload: { requestId, state } };
 }
 
 /**

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
-import { DOC_FRAGMENT, connectWithTimeout, fragmentHasContent } from "./collabProvider";
+import { DOC_FRAGMENT, connectWithTimeout, encodeDocumentState, fragmentHasContent } from "./collabProvider";
 
 /** Populate the body fragment the way a seeded room arrives from the server. */
 function seedBody(doc: Y.Doc): void {
@@ -213,5 +213,27 @@ describe("fragmentHasContent", () => {
         }),
       ),
     ).toBe(true);
+  });
+});
+
+describe("encodeDocumentState", () => {
+  it("produces Base64 that decodes back into an identical doc via applyUpdate", () => {
+    const doc = new Y.Doc();
+    seedBody(doc);
+    const b64 = encodeDocumentState(doc);
+    // Base64 only (this is the shape the BE Buffer.from(state,'base64') decodes).
+    expect(b64).toMatch(/^[A-Za-z0-9+/]*={0,2}$/);
+
+    // Round-trip exactly as the backend does.
+    const decoded = new Y.Doc();
+    Y.applyUpdate(decoded, Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)));
+    expect(fragmentHasContent(decoded.getXmlFragment(DOC_FRAGMENT))).toBe(true);
+    expect(decoded.getXmlFragment(DOC_FRAGMENT).toJSON()).toEqual(
+      doc.getXmlFragment(DOC_FRAGMENT).toJSON(),
+    );
+  });
+
+  it("encodes an empty doc without throwing (empty-ish Base64)", () => {
+    expect(typeof encodeDocumentState(new Y.Doc())).toBe("string");
   });
 });
