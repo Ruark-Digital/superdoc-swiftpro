@@ -28,6 +28,24 @@ export interface CollabConnectConfig {
 export const DOC_FRAGMENT = "supereditor";
 
 /**
+ * Encode a Y.Doc's full state as a Base64 string:
+ * `base64(Y.encodeStateAsUpdate(doc))`. This is the exact shape the backend
+ * decodes for the redline `resolve`/`batch-resolve` `documentState` field
+ * (`Y.applyUpdate(new Y.Doc(), Buffer.from(state, "base64"))`), so it must be a
+ * full state update — NOT a `Y.snapshot`, NOT raw binary. Chunked to keep
+ * `String.fromCharCode(...)` off the argument-count limit for large docs.
+ */
+export function encodeDocumentState(doc: Y.Doc): string {
+  const bytes = Y.encodeStateAsUpdate(doc);
+  let binary = "";
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(binary);
+}
+
+/**
  * True when the synced room already holds *renderable* document content in the
  * `"supereditor"` body fragment. Only then is JOINing safe; anything else must
  * be (re-)seeded from the docx.

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { parseHostMessage, postToHost, parseHostCommand, buildRedlines, buildRedlineClicked, buildSelectionState, buildCommentCreated, hasCollabConfig, type SuperdocOutbound } from "./bridge";
+import { parseHostMessage, postToHost, parseHostCommand, buildRedlines, buildRedlineClicked, buildSelectionState, buildCommentCreated, buildDocumentState, hasCollabConfig, type SuperdocOutbound } from "./bridge";
 
 const HOST = "http://localhost:5173";
 const EVIL = "http://evil.example.com";
@@ -126,6 +126,30 @@ describe("redline messages", () => {
   });
   it("buildRedlineClicked", () => {
     expect(buildRedlineClicked("r1")).toEqual({ type: "superdoc:redline-clicked", payload: { redlineId: "r1" } });
+  });
+});
+
+describe("get-document-state command", () => {
+  it("parseHostCommand accepts get-document-state with a requestId", () => {
+    const r = parseHostCommand(msg(HOST, { type: "superdoc:get-document-state", payload: { requestId: "req-1" } }), HOST);
+    expect(r).toEqual({ type: "superdoc:get-document-state", payload: { requestId: "req-1" } });
+  });
+  it("parseHostCommand rejects get-document-state with a missing/empty requestId", () => {
+    expect(parseHostCommand(msg(HOST, { type: "superdoc:get-document-state", payload: {} }), HOST)).toBeNull();
+    expect(parseHostCommand(msg(HOST, { type: "superdoc:get-document-state", payload: { requestId: "" } }), HOST)).toBeNull();
+  });
+  it("parseHostCommand rejects get-document-state from a foreign origin", () => {
+    expect(parseHostCommand(msg(EVIL, { type: "superdoc:get-document-state", payload: { requestId: "req-1" } }), HOST)).toBeNull();
+  });
+  it("buildDocumentState carries requestId + base64 state", () => {
+    expect(buildDocumentState("req-1", "AAEC")).toEqual({
+      type: "superdoc:document-state", payload: { requestId: "req-1", state: "AAEC" },
+    });
+  });
+  it("buildDocumentState carries null state when there is no live doc", () => {
+    expect(buildDocumentState("req-1", null)).toEqual({
+      type: "superdoc:document-state", payload: { requestId: "req-1", state: null },
+    });
   });
 });
 
