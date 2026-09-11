@@ -9,7 +9,12 @@
  * The mapping mirrors the host's own `useCollabProvider.subscribeAwareness`:
  *   - exclude the local client (we render "self" separately / not at all),
  *   - require a `user.name` (skip cursors that haven't announced identity yet),
- *   - de-dupe by `name|avatarUrl` (a user open in two tabs is one person).
+ *   - de-dupe by `name|avatarUrl` (a user open in two tabs is one person),
+ *   - exclude the local *identity*, not just the local client id: a browser
+ *     refresh leaves the previous session's awareness entry in the map (a
+ *     different client id, same user) until it times out, so excluding only the
+ *     current client id would render that stale entry as a ghost peer of
+ *     yourself.
  */
 
 import { buildPresence, postToHost, type PresenceUser } from "./bridge";
@@ -27,24 +32,41 @@ export interface AwarenessLike {
  * Pure mapper: awareness state map → host `PresenceUser[]` (peers only).
  * Exported for unit testing without a live provider.
  */
+/** Parse an awareness state into a named identity, or null if unnamed. */
+const parseIdentity = (
+  state: unknown,
+): { name: string; avatarUrl?: string; key: string } | null => {
+  const user = (state as { user?: { name?: unknown; avatarUrl?: unknown } } | null)
+    ?.user;
+  const name = user && typeof user.name === "string" ? user.name : "";
+  if (!name) return null;
+  const avatarUrl =
+    user && typeof user.avatarUrl === "string" ? user.avatarUrl : undefined;
+  return { name, avatarUrl, key: `${name}|${avatarUrl ?? ""}` };
+};
+
 export function mapAwarenessToUsers(
   states: Map<number, unknown>,
   localId: number,
 ): PresenceUser[] {
   const users: PresenceUser[] = [];
   const seen = new Set<string>();
+  // Seed the de-dupe set with our own identity so a stale entry from a previous
+  // session of ours (an old client id left behind by a refresh) is skipped, not
+  // just the current local client id.
+  const self = parseIdentity(states.get(localId));
+  if (self) seen.add(self.key);
   states.forEach((state, clientId) => {
     if (clientId === localId) return;
-    const user = (state as { user?: { name?: unknown; avatarUrl?: unknown } } | null)
-      ?.user;
-    const name = user && typeof user.name === "string" ? user.name : "";
-    if (!name) return;
-    const avatarUrl =
-      user && typeof user.avatarUrl === "string" ? user.avatarUrl : undefined;
-    const key = `${name}|${avatarUrl ?? ""}`;
-    if (seen.has(key)) return;
-    seen.add(key);
-    users.push(avatarUrl ? { clientId, name, avatarUrl } : { clientId, name });
+    const id = parseIdentity(state);
+    if (!id) return;
+    if (seen.has(id.key)) return;
+    seen.add(id.key);
+    users.push(
+      id.avatarUrl
+        ? { clientId, name: id.name, avatarUrl: id.avatarUrl }
+        : { clientId, name: id.name },
+    );
   });
   return users;
 }
