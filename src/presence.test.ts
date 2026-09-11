@@ -36,6 +36,18 @@ describe("mapAwarenessToUsers", () => {
       { clientId: 2, name: "Ada", avatarUrl: "a.png" },
     ]);
   });
+
+  it("excludes a stale entry from our own previous session (refresh ghost)", () => {
+    // client 5 is our current session; client 1 is our own previous session
+    // (same identity) still lingering in awareness after a refresh — it must
+    // NOT be relayed as a peer of ourselves.
+    const map = states([
+      [1, { user: { name: "Ada" } }], // stale self ghost (old client id)
+      [3, { user: { name: "Grace" } }], // a real peer
+      [5, { user: { name: "Ada" } }], // current self
+    ]);
+    expect(mapAwarenessToUsers(map, 5)).toEqual([{ clientId: 3, name: "Grace" }]);
+  });
 });
 
 describe("observePresence", () => {
