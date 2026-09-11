@@ -53,9 +53,24 @@ interface DocApiLike {
     }) => unknown;
   };
   replace: (
-    input: { ref: string; text: string },
+    input: { target?: unknown; ref?: string; text: string },
     options?: { changeMode?: "direct" | "tracked" },
   ) => unknown;
+  /**
+   * Text match. Each text match carries a canonical, mutation-ready `target`
+   * (`SelectionTarget`) that `replace` accepts directly — the supported way to
+   * turn a tracked change's live text into a replaceable range (the change's
+   * own entity ref is rejected as a mutation target). The result is a
+   * DiscoveryOutput; the target's exact nesting varies by SuperDoc version, so
+   * callers read it defensively.
+   */
+  query?: {
+    match: (selector: {
+      type: "text";
+      pattern: string;
+      caseSensitive?: boolean;
+    }) => unknown;
+  };
   selection: {
     current: (input?: { includeText?: boolean }) => {
       activeChangeIds?: string[];
@@ -145,19 +160,47 @@ export function extractRedlines(editor: Editor | null): RedlineSpan[] {
 }
 
 /**
+ * Pull the first mutation-ready selection `target` out of a `find` result. The
+ * shape differs across SuperDoc versions — DiscoveryOutput exposes `items[]`
+ * (each `context.target`), the lower-level QueryResult a parallel `context[]` —
+ * so probe both defensively.
+ */
+function firstMatchTarget(found: unknown): unknown {
+  if (!found || typeof found !== "object") return undefined;
+  const f = found as {
+    items?: Array<{
+      target?: unknown;
+      domain?: { target?: unknown };
+      context?: { target?: unknown };
+    }>;
+    context?: Array<{ target?: unknown }>;
+  };
+  if (Array.isArray(f.items)) {
+    for (const it of f.items) {
+      const t = it?.target ?? it?.domain?.target ?? it?.context?.target;
+      if (t) return t;
+    }
+  }
+  if (Array.isArray(f.context)) {
+    for (const c of f.context) if (c?.target) return c.target;
+  }
+  return undefined;
+}
+
+/**
  * Apply a host `apply-redline` command: make `replacement` the live text of the
  * tracked change `redlineId`, then clear any residual tracking.
  *
- * Strategy (see task report for the rejected alternatives):
- *   1. `doc.replace({ ref, text: replacement }, { changeMode: 'direct' })`
- *      sets the final text directly — `direct` avoids spawning a *new* tracked
- *      change for our own substitution.
- *   2. `doc.trackChanges.decide({ decision: 'accept', target: { id } })`
- *      accepts the original change so nothing stays pending. This is
- *      best-effort cleanup: after the direct replace the original marks may
- *      already be gone, in which case decide is a harmless no-op.
+ * The change's own entity ref (`tc::body::<id>`) is NOT a valid text-mutation
+ * target, and `ranges.resolve` rejects it ("only text refs from a query"). The
+ * supported route is to text-search the change's live content and replace the
+ * match's canonical, mutation-ready `target`:
+ *   1. `doc.query.match({ type: 'text', pattern })` → a match carrying `target`.
+ *   2. `doc.replace({ target, text: replacement }, { changeMode: 'direct' })`.
+ *   3. `doc.trackChanges.decide({ decision: 'accept', target: { id } })` clears
+ *      any residual tracking (best-effort).
  *
- * No-op (and swallows errors) if the editor, the change id, or its ref is
+ * No-op (and swallows errors) if the editor, the change, or a usable target is
  * missing — never corrupt the document on bad input.
  */
 export function applyRedline(
@@ -168,17 +211,42 @@ export function applyRedline(
   const doc = getDoc(editor);
   if (!doc || typeof redlineId !== "string" || redlineId.length === 0) return;
 
-  let ref: string | undefined;
+  let matched: TrackedChangeItem | undefined;
   try {
     const items = doc.trackChanges.list({ in: "all" }).items ?? [];
-    ref = items.find((it) => it.id === redlineId)?.handle?.ref;
+    matched = items.find((it) => it.id === redlineId);
   } catch {
     return;
   }
-  if (!ref) return; // change not found — defensive no-op.
+  // Search for the change's live text (the inserted content); fall back to the
+  // excerpt / deleted text so a deletion-style change is still locatable.
+  const searchText =
+    matched?.insertedText ?? matched?.deletedText ?? matched?.excerpt ?? "";
+  if (!matched || searchText.length === 0) return; // not found / no text — no-op.
 
+  let target: unknown;
   try {
-    doc.replace({ ref, text: replacement }, { changeMode: "direct" });
+    const found = doc.query?.match({
+      type: "text",
+      pattern: searchText,
+      caseSensitive: true,
+    });
+    target = firstMatchTarget(found);
+  } catch {
+    return;
+  }
+  if (!target) return; // couldn't locate the text — no-op.
+
+  // NOTE (pending product decision): the swap currently renders as a TRACKED
+  // change (original struck through + recommendation inserted), not a clean
+  // replacement, because the editor is in "suggesting" (track-changes) mode when
+  // this runs, so the edit is recorded as a revision despite `changeMode:
+  // "direct"`. If the client wants a CLEAN swap (final text, no strikethrough),
+  // apply the edit without tracking — e.g. toggle the editor out of suggesting
+  // mode around the mutation, or accept the resulting revision(s) covering the
+  // target range after replacing. Left as tracked pending that decision.
+  try {
+    doc.replace({ target, text: replacement }, { changeMode: "direct" });
   } catch {
     // If the direct replace failed, do not attempt the accept — leave the doc
     // as-is rather than half-applying.
