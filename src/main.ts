@@ -98,9 +98,18 @@ function pingDocEdit(): void {
   }, DOC_EDIT_DEBOUNCE_MS);
 }
 
-/** Re-extract the document's tracked changes and push the full set to the host. */
+/**
+ * Re-extract the document's tracked changes and push the full set to the host.
+ * Skips the post when the set is identical to the last one sent — extraction is
+ * a full-document scan, and peers' edits can fire the change event repeatedly.
+ */
+let lastRedlineSignature: string | null = null;
 function pushRedlines(): void {
-  postToHost(buildRedlines(extractRedlines(editorInstance)), hostTarget());
+  const redlines = extractRedlines(editorInstance);
+  const signature = JSON.stringify(redlines);
+  if (signature === lastRedlineSignature) return;
+  lastRedlineSignature = signature;
+  postToHost(buildRedlines(redlines), hostTarget());
 }
 
 /**
