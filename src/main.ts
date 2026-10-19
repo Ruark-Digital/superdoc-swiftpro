@@ -112,6 +112,18 @@ function pushRedlines(): void {
   postToHost(buildRedlines(redlines), hostTarget());
 }
 
+/** Trailing debounce for redline pushes: a burst of tracked-change events
+ *  (typing in suggesting mode, or a collaborator's edits) costs one scan. */
+const REDLINE_PUSH_DEBOUNCE_MS = 150;
+let redlinePushTimer: ReturnType<typeof setTimeout> | undefined;
+function scheduleRedlinesPush(): void {
+  if (redlinePushTimer !== undefined) clearTimeout(redlinePushTimer);
+  redlinePushTimer = setTimeout(() => {
+    redlinePushTimer = undefined;
+    pushRedlines();
+  }, REDLINE_PUSH_DEBOUNCE_MS);
+}
+
 /**
  * Switch the live document mode after load. SuperDoc gates editability (and the
  * tracked-change toolbar buttons) on this mode; construction only sets it once,
@@ -254,7 +266,7 @@ function scheduleSelectionPost(): void {
  */
 function wireEditorEvents(editor: Editor): void {
   editor.on("tracked-changes-changed", () => {
-    pushRedlines();
+    scheduleRedlinesPush();
   });
 
   editor.on("selectionUpdate", () => {
