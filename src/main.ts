@@ -98,6 +98,18 @@ function pushRedlines(): void {
   postToHost(buildRedlines(redlines), hostTarget());
 }
 
+/** Trailing debounce for redline pushes: a burst of tracked-change events
+ *  (typing in suggesting mode, or a collaborator's edits) costs one scan. */
+const REDLINE_PUSH_DEBOUNCE_MS = 150;
+let redlinePushTimer: ReturnType<typeof setTimeout> | undefined;
+function scheduleRedlinesPush(): void {
+  if (redlinePushTimer !== undefined) clearTimeout(redlinePushTimer);
+  redlinePushTimer = setTimeout(() => {
+    redlinePushTimer = undefined;
+    pushRedlines();
+  }, REDLINE_PUSH_DEBOUNCE_MS);
+}
+
 /**
  * (Re)arm the debounce that auto-redlines the current selection once it stops
  * changing. Re-reads the live selection when it fires, so it always acts on the
@@ -126,7 +138,7 @@ function scheduleRedlineForSettledSelection(): void {
  */
 function wireEditorEvents(editor: Editor): void {
   editor.on("tracked-changes-changed", () => {
-    pushRedlines();
+    scheduleRedlinesPush();
   });
 
   editor.on("selectionUpdate", () => {
