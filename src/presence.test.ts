@@ -104,4 +104,25 @@ describe("observePresence", () => {
     stop();
     expect(aware.handlers).toBe(0);
   });
+
+  it("does not re-post when only cursor state changed (peer list identical)", () => {
+    const aware = fakeAwareness([
+      [1, { user: { name: "Me" } }],
+      [2, { user: { name: "Ada" }, cursor: { anchor: 4 } }],
+    ]);
+    const post = vi.fn<(msg: SuperdocOutbound, origin: string) => void>();
+
+    observePresence(aware, "https://host.example", post);
+    expect(post).toHaveBeenCalledTimes(1);
+
+    // Ada moves her cursor many times — the presence list itself is unchanged.
+    for (let i = 0; i < 20; i += 1) {
+      aware.setStates([
+        [1, { user: { name: "Me" } }],
+        [2, { user: { name: "Ada" }, cursor: { anchor: 10 + i } }],
+      ]);
+      aware.fire();
+    }
+    expect(post).toHaveBeenCalledTimes(1);
+  });
 });
