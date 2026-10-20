@@ -46,6 +46,27 @@ export function isDiagEnabled(): boolean {
   return true;
 }
 
+/**
+ * Whether the high-frequency traces (per awareness change, per Yjs update) should
+ * emit. Off by default: they fire on every keystroke and every peer edit or cursor
+ * move, and logging each one is itself a cost in a busy room. Opt in with
+ * `localStorage.setItem("superdoc:debug","2")` or `?superdocDebug=2`.
+ */
+export function isDiagVerbose(): boolean {
+  if (!isDiagEnabled()) return false;
+  if (typeof window === "undefined") return false;
+  try {
+    if (window.localStorage?.getItem("superdoc:debug") === "2") return true;
+  } catch {
+    // localStorage blocked — fall through.
+  }
+  try {
+    return new URLSearchParams(window.location.search).get("superdocDebug") === "2";
+  } catch {
+    return false;
+  }
+}
+
 /** Emit one diagnostic line. No-op when disabled or not in a browser. */
 export function diag(event: string, data?: Record<string, unknown>): void {
   if (!isDiagEnabled()) return;

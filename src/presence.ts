@@ -82,8 +82,15 @@ export function observePresence(
   hostOrigin: string,
   post: typeof postToHost = postToHost,
 ): () => void {
+  // Awareness fires on every cursor/selection move from every peer, but the
+  // presence list only changes when someone joins, leaves or renames. Skip the
+  // host post when the list is unchanged so a busy room doesn't flood the bridge.
+  let lastSignature: string | null = null;
   const emit = () => {
     const users = mapAwarenessToUsers(awareness.getStates(), awareness.clientID);
+    const signature = JSON.stringify(users);
+    if (signature === lastSignature) return;
+    lastSignature = signature;
     post(buildPresence(users), hostOrigin);
   };
   awareness.on("change", emit);
