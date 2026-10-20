@@ -32,7 +32,7 @@ import { hydrateImageMedia, type MediaEditorLike } from "./imageMedia";
 import { connectWithTimeout, encodeDocumentState } from "./collabProvider";
 import { observePresence, type AwarenessLike } from "./presence";
 import { pickReadyTargets, resolveHostOrigins } from "./env";
-import { diag, describeOrigin } from "./diag";
+import { diag, describeOrigin, isDiagVerbose } from "./diag";
 import "./style.css";
 
 // Allowlist of host origins permitted to embed/drive this editor (one editor
@@ -98,9 +98,30 @@ function pingDocEdit(): void {
   }, DOC_EDIT_DEBOUNCE_MS);
 }
 
-/** Re-extract the document's tracked changes and push the full set to the host. */
+/**
+ * Re-extract the document's tracked changes and push the full set to the host.
+ * Skips the post when the set is identical to the last one sent — extraction is
+ * a full-document scan, and peers' edits can fire the change event repeatedly.
+ */
+let lastRedlineSignature: string | null = null;
 function pushRedlines(): void {
-  postToHost(buildRedlines(extractRedlines(editorInstance)), hostTarget());
+  const redlines = extractRedlines(editorInstance);
+  const signature = JSON.stringify(redlines);
+  if (signature === lastRedlineSignature) return;
+  lastRedlineSignature = signature;
+  postToHost(buildRedlines(redlines), hostTarget());
+}
+
+/** Trailing debounce for redline pushes: a burst of tracked-change events
+ *  (typing in suggesting mode, or a collaborator's edits) costs one scan. */
+const REDLINE_PUSH_DEBOUNCE_MS = 150;
+let redlinePushTimer: ReturnType<typeof setTimeout> | undefined;
+function scheduleRedlinesPush(): void {
+  if (redlinePushTimer !== undefined) clearTimeout(redlinePushTimer);
+  redlinePushTimer = setTimeout(() => {
+    redlinePushTimer = undefined;
+    pushRedlines();
+  }, REDLINE_PUSH_DEBOUNCE_MS);
 }
 
 /**
@@ -245,7 +266,7 @@ function scheduleSelectionPost(): void {
  */
 function wireEditorEvents(editor: Editor): void {
   editor.on("tracked-changes-changed", () => {
-    pushRedlines();
+    scheduleRedlinesPush();
   });
 
   editor.on("selectionUpdate", () => {
@@ -404,49 +425,52 @@ async function handleInit(init: SuperdocInit): Promise<void> {
       stopPresence = observePresence(awareness, hostTarget());
 
       // DIAGNOSTIC (live-collab bug): watch the two channels that carry live
-      // collaboration between peers.
-      try {
-        // 1) Awareness churn. Rapid added/removed cycles are the avatar flicker;
-        //    a peer present in the state map but with no `user.name` is why it
-        //    drops out of the relayed presence list (and shows no cursor).
-        const aw = collab.provider.awareness as unknown as {
-          clientID: number;
-          getStates(): Map<number, { user?: { name?: unknown } }>;
-          on(
-            event: "change",
-            cb: (d: { added: number[]; updated: number[]; removed: number[] }) => void,
-          ): void;
-        };
-        aw.on("change", ({ added, updated, removed }) => {
-          const states = aw.getStates();
-          const peers = [...states.entries()]
-            .filter(([id]) => id !== aw.clientID)
-            .map(([id, s]) => ({
-              id,
-              name: typeof s?.user?.name === "string" ? s.user.name : null,
-            }));
-          diag("awareness.change", {
-            self: aw.clientID,
-            total: states.size,
-            peers,
-            added,
-            updated,
-            removed,
+      // collaboration between peers. The per-change traces are verbose-only
+      // (see isDiagVerbose) so they don't run or log on every update by default.
+      if (isDiagVerbose()) {
+        try {
+          // 1) Awareness churn. Rapid added/removed cycles are the avatar flicker;
+          //    a peer present in the state map but with no `user.name` is why it
+          //    drops out of the relayed presence list (and shows no cursor).
+          const aw = collab.provider.awareness as unknown as {
+            clientID: number;
+            getStates(): Map<number, { user?: { name?: unknown } }>;
+            on(
+              event: "change",
+              cb: (d: { added: number[]; updated: number[]; removed: number[] }) => void,
+            ): void;
+          };
+          aw.on("change", ({ added, updated, removed }) => {
+            const states = aw.getStates();
+            const peers = [...states.entries()]
+              .filter(([id]) => id !== aw.clientID)
+              .map(([id, s]) => ({
+                id,
+                name: typeof s?.user?.name === "string" ? s.user.name : null,
+              }));
+            diag("awareness.change", {
+              self: aw.clientID,
+              total: states.size,
+              peers,
+              added,
+              updated,
+              removed,
+            });
           });
-        });
 
-        // 2) Doc updates. A remote-origin update proves peer edits are crossing
-        //    the wire; if only local-origin updates ever appear, the peers are
-        //    isolated (edits never sync, no remote cursor).
-        collab.doc.on("update", (update: Uint8Array, origin: unknown) => {
-          diag("doc.update", {
-            origin: describeOrigin(origin),
-            bytes: update.byteLength,
-            local: origin === null || origin === undefined,
+          // 2) Doc updates. A remote-origin update proves peer edits are crossing
+          //    the wire; if only local-origin updates ever appear, the peers are
+          //    isolated (edits never sync, no remote cursor).
+          collab.doc.on("update", (update: Uint8Array, origin: unknown) => {
+            diag("doc.update", {
+              origin: describeOrigin(origin),
+              bytes: update.byteLength,
+              local: origin === null || origin === undefined,
+            });
           });
-        });
-      } catch {
-        // Diagnostics must never break collaboration.
+        } catch {
+          // Diagnostics must never break collaboration.
+        }
       }
     }
   } catch (err) {
