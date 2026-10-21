@@ -84,9 +84,30 @@ function pingDocEdit(): void {
   }, DOC_EDIT_DEBOUNCE_MS);
 }
 
-/** Re-extract the document's tracked changes and push the full set to the host. */
+/**
+ * Re-extract the document's tracked changes and push the full set to the host.
+ * Skips the post when the set is identical to the last one sent — extraction is
+ * a full-document scan, and peers' edits can fire the change event repeatedly.
+ */
+let lastRedlineSignature: string | null = null;
 function pushRedlines(): void {
-  postToHost(buildRedlines(extractRedlines(editorInstance)), hostTarget());
+  const redlines = extractRedlines(editorInstance);
+  const signature = JSON.stringify(redlines);
+  if (signature === lastRedlineSignature) return;
+  lastRedlineSignature = signature;
+  postToHost(buildRedlines(redlines), hostTarget());
+}
+
+/** Trailing debounce for redline pushes: a burst of tracked-change events
+ *  (typing in suggesting mode, or a collaborator's edits) costs one scan. */
+const REDLINE_PUSH_DEBOUNCE_MS = 150;
+let redlinePushTimer: ReturnType<typeof setTimeout> | undefined;
+function scheduleRedlinesPush(): void {
+  if (redlinePushTimer !== undefined) clearTimeout(redlinePushTimer);
+  redlinePushTimer = setTimeout(() => {
+    redlinePushTimer = undefined;
+    pushRedlines();
+  }, REDLINE_PUSH_DEBOUNCE_MS);
 }
 
 /**
@@ -117,7 +138,7 @@ function scheduleRedlineForSettledSelection(): void {
  */
 function wireEditorEvents(editor: Editor): void {
   editor.on("tracked-changes-changed", () => {
-    pushRedlines();
+    scheduleRedlinesPush();
   });
 
   editor.on("selectionUpdate", () => {
