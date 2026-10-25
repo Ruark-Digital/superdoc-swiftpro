@@ -86,6 +86,28 @@ describe("trackedChangeToSpan", () => {
     });
   });
 
+  it("maps a replacement: struck text is the original, inserted text the redline (QA #186)", () => {
+    expect(
+      trackedChangeToSpan({
+        id: "tc6",
+        type: "replacement",
+        deletedText: "15 days",
+        insertedText: "45 days",
+      }),
+    ).toEqual({
+      redlineId: "tc6",
+      kind: "insertion",
+      text: "45 days",
+      originalText: "15 days",
+    });
+  });
+
+  it("omits originalText for a plain insertion", () => {
+    expect(
+      trackedChangeToSpan({ id: "tc7", type: "insert", insertedText: "a", deletedText: "b" }),
+    ).not.toHaveProperty("originalText");
+  });
+
   it("returns null for unknown types and missing ids", () => {
     expect(trackedChangeToSpan({ id: "tc5", type: "weird" })).toBeNull();
     expect(trackedChangeToSpan({ id: "", type: "insert" })).toBeNull();

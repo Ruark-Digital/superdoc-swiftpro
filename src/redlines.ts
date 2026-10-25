@@ -96,7 +96,8 @@ function getDoc(editor: Editor | null): DocApiLike | null {
  * changes too; the host only distinguishes insertion vs deletion, so we fold:
  *   - 'insert'                 → "insertion"
  *   - 'delete'                 → "deletion"
- *   - 'replacement' / 'format' → "insertion" (the live text it introduces)
+ *   - 'replacement' / 'format' → "insertion" (the live text it introduces;
+ *     a replacement also carries its struck text as `originalText`)
  * Returns null for unknown types so the caller can skip them.
  */
 function toRedlineKind(type: string): RedlineKind | null {
@@ -123,6 +124,11 @@ export function trackedChangeToSpan(item: TrackedChangeItem): RedlineSpan | null
     "";
 
   const span: RedlineSpan = { redlineId: item.id, kind, text };
+  // A replacement's inserted text is the redline; the struck text it replaces
+  // is the original (QA #186) — carry it so the host shows the right pair.
+  if (item.type === "replacement" && item.deletedText) {
+    span.originalText = item.deletedText;
+  }
   if (typeof item.author === "string") span.author = item.author;
   if (typeof item.date === "string") span.createdAt = item.date;
   return span;

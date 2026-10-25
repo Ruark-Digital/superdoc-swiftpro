@@ -18,6 +18,9 @@ export interface RedlineSpan {
   redlineId: string;
   kind: RedlineKind;
   text: string;
+  /** For a replacement (delete+insert pair): the struck/deleted text that
+   *  `text` replaces. Absent for a plain insertion or deletion. */
+  originalText?: string;
   author?: string;
   createdAt?: string;
 }
