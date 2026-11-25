@@ -123,6 +123,21 @@ export function trackedChangeToSpan(item: TrackedChangeItem): RedlineSpan | null
     "";
 
   const span: RedlineSpan = { redlineId: item.id, kind, text };
+  if (item.type === "replacement") {
+    const deleted = item.deletedText ?? "";
+    // The list may omit insertedText and only give the concatenated excerpt
+    // (deleted + inserted); recover the inserted part from it.
+    const inserted =
+      item.insertedText ??
+      (deleted && item.excerpt?.startsWith(deleted)
+        ? item.excerpt.slice(deleted.length)
+        : undefined);
+    if (deleted && inserted) {
+      span.deletedText = deleted;
+      span.insertedText = inserted;
+      span.text = inserted;
+    }
+  }
   if (typeof item.author === "string") span.author = item.author;
   if (typeof item.date === "string") span.createdAt = item.date;
   return span;

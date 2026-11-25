@@ -86,6 +86,22 @@ describe("trackedChangeToSpan", () => {
     });
   });
 
+  it("keeps a replacement's deleted and inserted text separate", () => {
+    expect(
+      trackedChangeToSpan({
+        id: "r1",
+        type: "replacement",
+        deletedText: "Senior",
+        insertedText: "Principal",
+        excerpt: "SeniorPrincipal",
+      }),
+    ).toMatchObject({ kind: "insertion", text: "Principal", deletedText: "Senior", insertedText: "Principal" });
+    // insertedText missing: recover it from the concatenated excerpt.
+    expect(
+      trackedChangeToSpan({ id: "r2", type: "replacement", deletedText: "Senior", excerpt: "SeniorPrincipal" }),
+    ).toMatchObject({ deletedText: "Senior", insertedText: "Principal" });
+  });
+
   it("returns null for unknown types and missing ids", () => {
     expect(trackedChangeToSpan({ id: "tc5", type: "weird" })).toBeNull();
     expect(trackedChangeToSpan({ id: "", type: "insert" })).toBeNull();

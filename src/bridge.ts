@@ -20,6 +20,11 @@ export interface RedlineSpan {
   text: string;
   author?: string;
   createdAt?: string;
+  /** Set only for a replacement (delete + insert pair, e.g. Senior -> Principal):
+   *  the removed and the inserted text, so the host can show Original / New
+   *  instead of one concatenated string. `text` stays the inserted text. */
+  deletedText?: string;
+  insertedText?: string;
 }
 
 const DOCUMENT_MODES: readonly DocumentMode[] = ["editing", "viewing", "suggesting"];
