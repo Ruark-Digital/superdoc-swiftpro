@@ -202,31 +202,53 @@ function firstMatchTarget(found: unknown): unknown {
   return undefined;
 }
 
-/**
- * Apply a host `apply-redline` command: make `replacement` the live text of the
- * tracked change `redlineId`, then clear any residual tracking.
- *
- * The change's own entity ref (`tc::body::<id>`) is NOT a valid text-mutation
- * target, and `ranges.resolve` rejects it ("only text refs from a query"). The
- * supported route is to text-search the change's live content and replace the
- * match's canonical, mutation-ready `target`:
- *   1. `doc.query.match({ type: 'text', pattern })` → a match carrying `target`.
- *   2. `doc.replace({ target, text: replacement }, { changeMode: 'direct' })`.
- *   3. `doc.trackChanges.decide({ decision: 'accept', target: { id } })` clears
- *      any residual tracking (best-effort).
- *
- * No-op (and swallows errors) if the editor, the change, or a usable target is
- * missing — never corrupt the document on bad input.
- */
 export type ApplyRedlineResult =
   | { ok: true }
   | {
       ok: false;
       /** Why nothing changed, so the host can tell the user instead of showing a
        *  suggestion as resolved while the document is untouched. */
-      reason: "no-editor" | "not-found" | "no-text" | "no-target" | "replace-failed";
+      reason:
+        | "no-editor"
+        | "not-found"
+        | "no-text"
+        | "no-target"
+        | "resolve-failed"
+        | "replace-failed";
     };
 
+/**
+ * Find the live text range of `pattern` (a mutation-ready target), or undefined.
+ */
+function findTarget(doc: DocApiLike, pattern: string): unknown {
+  try {
+    return firstMatchTarget(
+      doc.query?.match({ type: "text", pattern, caseSensitive: true }),
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Apply a host `apply-redline` command as a CLEAN swap: the approved
+ * `replacement` ends up as plain text in place of the suggested change, with no
+ * leftover struck-through deletion or tracked insertion.
+ *
+ * Why the order matters: SuperDoc force-tracks ANY edit that touches an existing
+ * tracked change, even a "direct" one (the editor protects review state; see
+ * `transactionTouchesTrackedReviewState` in its dispatch). Replacing the text
+ * while it is still a tracked change therefore yields a tracked deletion plus a
+ * tracked insertion, whatever the editing mode. So:
+ *   1. locate the change's text (pre-check, nothing modified if it is missing);
+ *   2. RESOLVE the tracked change first: accept an insertion / replacement (its
+ *      text becomes plain, the deleted part is gone) or reject a deletion (the
+ *      struck text is restored to plain);
+ *   3. direct-replace the now-plain text with the approved text. Plain text
+ *      carries no review state, so this is not tracked.
+ *
+ * Returns why nothing happened rather than failing silently.
+ */
 export function applyRedline(
   editor: Editor | null,
   redlineId: string,
@@ -244,47 +266,37 @@ export function applyRedline(
   } catch {
     return { ok: false, reason: "no-editor" };
   }
-  // Search for the change's live text (the inserted content); fall back to the
-  // excerpt / deleted text so a deletion-style change is still locatable.
-  const searchText =
-    matched?.insertedText ?? matched?.deletedText ?? matched?.excerpt ?? "";
   if (!matched) return { ok: false, reason: "not-found" }; // change is gone from this document
+
+  // The text that remains (insertion / replacement) or was struck (deletion).
+  const isDeletion = matched.type === "delete";
+  const span = trackedChangeToSpan(matched);
+  const searchText = isDeletion
+    ? (matched.deletedText ?? matched.excerpt ?? "")
+    : (span?.text ?? "");
   if (searchText.length === 0) return { ok: false, reason: "no-text" };
 
-  let target: unknown;
-  try {
-    const found = doc.query?.match({
-      type: "text",
-      pattern: searchText,
-      caseSensitive: true,
-    });
-    target = firstMatchTarget(found);
-  } catch {
-    return { ok: false, reason: "no-target" };
-  }
-  if (!target) return { ok: false, reason: "no-target" }; // couldn't locate the text
+  // 1. Pre-check: never touch the document if the text cannot be located.
+  if (!findTarget(doc, searchText)) return { ok: false, reason: "no-target" };
 
-  // NOTE (pending product decision): the swap currently renders as a TRACKED
-  // change (original struck through + recommendation inserted), not a clean
-  // replacement, because the editor is in "suggesting" (track-changes) mode when
-  // this runs, so the edit is recorded as a revision despite `changeMode:
-  // "direct"`. If the client wants a CLEAN swap (final text, no strikethrough),
-  // apply the edit without tracking — e.g. toggle the editor out of suggesting
-  // mode around the mutation, or accept the resulting revision(s) covering the
-  // target range after replacing. Left as tracked pending that decision.
+  // 2. Resolve the tracked change so its text is plain.
+  try {
+    doc.trackChanges.decide({
+      decision: isDeletion ? "reject" : "accept",
+      target: { id: redlineId },
+    });
+  } catch {
+    return { ok: false, reason: "resolve-failed" };
+  }
+
+  // 3. Replace the now-plain text. Re-resolve the target: positions moved when
+  //    the change was resolved.
+  const target = findTarget(doc, searchText);
+  if (!target) return { ok: false, reason: "no-target" };
   try {
     doc.replace({ target, text: replacement }, { changeMode: "direct" });
   } catch {
-    // If the direct replace failed, do not attempt the accept — leave the doc
-    // as-is rather than half-applying.
     return { ok: false, reason: "replace-failed" };
-  }
-
-  try {
-    doc.trackChanges.decide({ decision: "accept", target: { id: redlineId } });
-  } catch {
-    // Residual-tracking cleanup is best-effort; the replace above already made
-    // `replacement` the live text, which satisfies the host contract.
   }
   return { ok: true };
 }

@@ -72,6 +72,7 @@ export type SuperdocOutbound =
   | { type: "superdoc:redlines"; payload: { redlines: RedlineSpan[] } }
   | { type: "superdoc:redline-clicked"; payload: { redlineId: string } }
   | { type: "superdoc:redline-applied"; payload: { redlineId: string; ok: boolean; reason?: string } }
+  | { type: "superdoc:collab-lost"; payload: { reason: string; attempts: number } }
   | { type: "superdoc:presence"; payload: { users: PresenceUser[] } }
   | { type: "superdoc:selection"; payload: { hasSelection: boolean; excerpt: string } }
   | { type: "superdoc:comment-created"; payload: { requestId: string; commentId: string | null } }
@@ -227,6 +228,11 @@ export function buildRedlineApplied(
     type: "superdoc:redline-applied",
     payload: reason ? { redlineId, ok, reason } : { redlineId, ok },
   };
+}
+
+/** The live collaboration connection is gone for good (the host decides why). */
+export function buildCollabLost(reason: string, attempts: number): SuperdocOutbound {
+  return { type: "superdoc:collab-lost", payload: { reason, attempts } };
 }
 
 export function buildPresence(users: PresenceUser[]): SuperdocOutbound {

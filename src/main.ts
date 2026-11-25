@@ -6,6 +6,7 @@ import {
   buildDocumentState,
   buildRedlineClicked,
   buildRedlineApplied,
+  buildCollabLost,
   buildRedlines,
   buildSelectionState,
   hasCollabConfig,
@@ -322,6 +323,11 @@ async function handleInit(init: SuperdocInit): Promise<void> {
           roomId: init.payload.roomId,
           token: init.payload.token,
           timeoutMs: COLLAB_SYNC_TIMEOUT_MS,
+          // Retries are over (or never started): tell the host so it can say why
+          // instead of the editor silently showing a stale document.
+          onConnectionLost: ({ reason, attempts }) => {
+            postToHost(buildCollabLost(reason, attempts), hostTarget());
+          },
           // Decode the backend's custom collab messages. An `error` frame is the
           // server telling us it rejected something (e.g. an oversized seed)
           // without closing the socket — surface it so it stops being silent.
