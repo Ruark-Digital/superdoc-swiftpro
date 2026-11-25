@@ -130,8 +130,29 @@ function scheduleRedlinesPush(): void {
  * so a turn-based host that flips "viewing" → "suggesting" must reach us here.
  * No-ops until the SuperDoc instance is ready.
  */
+let currentDocumentMode: DocumentMode = "editing";
+
 function setDocumentMode(mode: DocumentMode): void {
+  currentDocumentMode = mode;
   superdocInstance?.setDocumentMode(mode);
+}
+
+/**
+ * Apply an accepted recommendation as a CLEAN swap. In "suggesting" mode the
+ * replace is recorded as a tracked change (original struck through plus the new
+ * text inserted) even with changeMode "direct", so the accepted text would not
+ * actually replace the highlighted text. Run the swap in "editing" mode and
+ * restore the previous mode afterwards.
+ */
+function applyRedlineClean(redlineId: string, replacement: string): void {
+  const previous = currentDocumentMode;
+  const needsSwitch = previous === "suggesting";
+  if (needsSwitch) superdocInstance?.setDocumentMode("editing");
+  try {
+    applyRedline(editorInstance, redlineId, replacement);
+  } finally {
+    if (needsSwitch) superdocInstance?.setDocumentMode(previous);
+  }
 }
 
 /** The editor currently driving the toolbar (falls back to the captured one). */
@@ -283,6 +304,7 @@ async function handleInit(init: SuperdocInit): Promise<void> {
   if (initialized) return;
   initialized = true;
   redlineUser = init.payload.user;
+  currentDocumentMode = init.payload.documentMode;
 
   try {
     // Connect-or-fallback: sync a provider first (or null if unreachable).
@@ -495,7 +517,7 @@ window.addEventListener("message", (event) => {
   if (!cmd) return;
   switch (cmd.type) {
     case "superdoc:apply-redline":
-      applyRedline(editorInstance, cmd.payload.redlineId, cmd.payload.replacement);
+      applyRedlineClean(cmd.payload.redlineId, cmd.payload.replacement);
       break;
     case "superdoc:focus-redline":
       // navigateTo lives on the SuperDoc instance.
