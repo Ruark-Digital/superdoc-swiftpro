@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { parseHostMessage, postToHost, parseHostCommand, buildRedlines, buildRedlineClicked, buildSelectionState, buildCommentCreated, buildDocumentState, hasCollabConfig, type SuperdocOutbound } from "./bridge";
+import { parseHostMessage, postToHost, parseHostCommand, buildRedlines, buildRedlineClicked, buildRedlineApplied, buildSelectionState, buildCommentCreated, buildDocumentState, hasCollabConfig, type SuperdocOutbound } from "./bridge";
 
 const HOST = "http://localhost:5173";
 const EVIL = "http://evil.example.com";
@@ -124,6 +124,17 @@ describe("redline messages", () => {
       type: "superdoc:redlines", payload: { redlines: [{ redlineId: "r1", kind: "insertion", text: "x" }] },
     });
   });
+  it("buildRedlineApplied", () => {
+    expect(buildRedlineApplied("r1", true)).toEqual({
+      type: "superdoc:redline-applied",
+      payload: { redlineId: "r1", ok: true },
+    });
+    expect(buildRedlineApplied("r1", false, "not-found")).toEqual({
+      type: "superdoc:redline-applied",
+      payload: { redlineId: "r1", ok: false, reason: "not-found" },
+    });
+  });
+
   it("buildRedlineClicked", () => {
     expect(buildRedlineClicked("r1")).toEqual({ type: "superdoc:redline-clicked", payload: { redlineId: "r1" } });
   });

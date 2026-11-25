@@ -218,26 +218,38 @@ function firstMatchTarget(found: unknown): unknown {
  * No-op (and swallows errors) if the editor, the change, or a usable target is
  * missing — never corrupt the document on bad input.
  */
+export type ApplyRedlineResult =
+  | { ok: true }
+  | {
+      ok: false;
+      /** Why nothing changed, so the host can tell the user instead of showing a
+       *  suggestion as resolved while the document is untouched. */
+      reason: "no-editor" | "not-found" | "no-text" | "no-target" | "replace-failed";
+    };
+
 export function applyRedline(
   editor: Editor | null,
   redlineId: string,
   replacement: string,
-): void {
+): ApplyRedlineResult {
   const doc = getDoc(editor);
-  if (!doc || typeof redlineId !== "string" || redlineId.length === 0) return;
+  if (!doc || typeof redlineId !== "string" || redlineId.length === 0) {
+    return { ok: false, reason: "no-editor" };
+  }
 
   let matched: TrackedChangeItem | undefined;
   try {
     const items = doc.trackChanges.list({ in: "all" }).items ?? [];
     matched = items.find((it) => it.id === redlineId);
   } catch {
-    return;
+    return { ok: false, reason: "no-editor" };
   }
   // Search for the change's live text (the inserted content); fall back to the
   // excerpt / deleted text so a deletion-style change is still locatable.
   const searchText =
     matched?.insertedText ?? matched?.deletedText ?? matched?.excerpt ?? "";
-  if (!matched || searchText.length === 0) return; // not found / no text — no-op.
+  if (!matched) return { ok: false, reason: "not-found" }; // change is gone from this document
+  if (searchText.length === 0) return { ok: false, reason: "no-text" };
 
   let target: unknown;
   try {
@@ -248,9 +260,9 @@ export function applyRedline(
     });
     target = firstMatchTarget(found);
   } catch {
-    return;
+    return { ok: false, reason: "no-target" };
   }
-  if (!target) return; // couldn't locate the text — no-op.
+  if (!target) return { ok: false, reason: "no-target" }; // couldn't locate the text
 
   // NOTE (pending product decision): the swap currently renders as a TRACKED
   // change (original struck through + recommendation inserted), not a clean
@@ -265,7 +277,7 @@ export function applyRedline(
   } catch {
     // If the direct replace failed, do not attempt the accept — leave the doc
     // as-is rather than half-applying.
-    return;
+    return { ok: false, reason: "replace-failed" };
   }
 
   try {
@@ -274,6 +286,7 @@ export function applyRedline(
     // Residual-tracking cleanup is best-effort; the replace above already made
     // `replacement` the live text, which satisfies the host contract.
   }
+  return { ok: true };
 }
 
 /**

@@ -71,6 +71,7 @@ export type SuperdocOutbound =
   | { type: "superdoc:error"; payload: { message: string } }
   | { type: "superdoc:redlines"; payload: { redlines: RedlineSpan[] } }
   | { type: "superdoc:redline-clicked"; payload: { redlineId: string } }
+  | { type: "superdoc:redline-applied"; payload: { redlineId: string; ok: boolean; reason?: string } }
   | { type: "superdoc:presence"; payload: { users: PresenceUser[] } }
   | { type: "superdoc:selection"; payload: { hasSelection: boolean; excerpt: string } }
   | { type: "superdoc:comment-created"; payload: { requestId: string; commentId: string | null } }
@@ -214,6 +215,18 @@ export function buildRedlines(redlines: RedlineSpan[]): SuperdocOutbound {
 
 export function buildRedlineClicked(redlineId: string): SuperdocOutbound {
   return { type: "superdoc:redline-clicked", payload: { redlineId } };
+}
+
+/** Outcome of an `apply-redline` command, so the host never assumes it worked. */
+export function buildRedlineApplied(
+  redlineId: string,
+  ok: boolean,
+  reason?: string,
+): SuperdocOutbound {
+  return {
+    type: "superdoc:redline-applied",
+    payload: reason ? { redlineId, ok, reason } : { redlineId, ok },
+  };
 }
 
 export function buildPresence(users: PresenceUser[]): SuperdocOutbound {

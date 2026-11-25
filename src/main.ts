@@ -5,6 +5,7 @@ import {
   buildCommentCreated,
   buildDocumentState,
   buildRedlineClicked,
+  buildRedlineApplied,
   buildRedlines,
   buildSelectionState,
   hasCollabConfig,
@@ -149,7 +150,11 @@ function applyRedlineClean(redlineId: string, replacement: string): void {
   const needsSwitch = previous === "suggesting";
   if (needsSwitch) superdocInstance?.setDocumentMode("editing");
   try {
-    applyRedline(editorInstance, redlineId, replacement);
+    const result = applyRedline(editorInstance, redlineId, replacement);
+    postToHost(
+      buildRedlineApplied(redlineId, result.ok, result.ok ? undefined : result.reason),
+      hostTarget(),
+    );
   } finally {
     if (needsSwitch) superdocInstance?.setDocumentMode(previous);
   }

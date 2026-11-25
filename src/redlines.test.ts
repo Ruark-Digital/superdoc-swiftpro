@@ -133,6 +133,35 @@ describe("extractRedlines", () => {
   });
 });
 
+describe("applyRedline result", () => {
+  it("reports ok when the swap was made", () => {
+    const editor = fakeEditor({
+      items: [{ id: "tc1", type: "insert", insertedText: "clause" }],
+    });
+    expect(applyRedline(editor, "tc1", "x")).toEqual({ ok: true });
+  });
+  it("reports why nothing changed (so the host never shows a no-op as resolved)", () => {
+    expect(applyRedline(fakeEditor({ items: [] }), "gone", "x")).toEqual({
+      ok: false,
+      reason: "not-found",
+    });
+    expect(
+      applyRedline(fakeEditor({ items: [{ id: "t", type: "insert" }] }), "t", "x"),
+    ).toEqual({ ok: false, reason: "no-text" });
+    expect(
+      applyRedline(
+        fakeEditor({
+          items: [{ id: "t", type: "insert", insertedText: "a" }],
+          findResult: { items: [] },
+        }),
+        "t",
+        "x",
+      ),
+    ).toEqual({ ok: false, reason: "no-target" });
+    expect(applyRedline(null, "t", "x")).toEqual({ ok: false, reason: "no-editor" });
+  });
+});
+
 describe("applyRedline", () => {
   it("does nothing when the id is not found", () => {
     const onReplace = vi.fn();
