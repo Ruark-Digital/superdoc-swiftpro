@@ -192,11 +192,20 @@ export function connectWithTimeout(
       // Non-fatal: diagnostics must never break the connection path.
     }
 
-    const timer = setTimeout(() => finish(false), config.timeoutMs);
+    const timer = setTimeout(() => finish(false, "timeout"), config.timeoutMs);
 
-    function finish(synced: boolean): void {
+    function finish(synced: boolean, reason = "synced"): void {
       if (settled) return;
       settled = true;
+      // Which hydration path follows: JOIN (room populated), SEED (empty room,
+      // rendered from the original docx) or document-only (no sync, so the
+      // original docx with none of the room's tracked changes).
+      diag("collab.hydrate", {
+        roomId: config.roomId,
+        outcome: synced ? (roomHasContent(doc) ? "join" : "seed") : "document-only",
+        reason,
+        timeoutMs: config.timeoutMs,
+      });
       clearTimeout(timer);
       if (synced) {
         // After the initial sync, the room needs seeding unless its body
@@ -214,7 +223,7 @@ export function connectWithTimeout(
     provider.on("sync", (isSynced: boolean) => {
       if (isSynced) finish(true);
     });
-    provider.on("connection-error", () => finish(false));
-    provider.on("connection-close", () => finish(false));
+    provider.on("connection-error", () => finish(false, "connection-error"));
+    provider.on("connection-close", () => finish(false, "connection-close"));
   });
 }
