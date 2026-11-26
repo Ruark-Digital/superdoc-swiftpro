@@ -281,7 +281,106 @@ export type ApplyRedlineResult =
         | "no-target"
         | "resolve-failed"
         | "replace-failed";
+      /** The underlying error, for diagnosis from the host side. */
+      detail?: string;
     };
+
+/** Minimal ProseMirror surface for the state-level fallback swap. */
+type PmMark = { attrs?: { id?: unknown } };
+type PmNode = {
+  isText?: boolean;
+  isTextblock?: boolean;
+  isLeaf?: boolean;
+  text?: string;
+  marks?: PmMark[];
+  descendants: (f: (node: PmNode, pos: number) => boolean | void) => void;
+};
+type StateEditor = {
+  state?: {
+    doc: PmNode;
+    tr: { insertText: (text: string, from: number, to: number) => unknown };
+  };
+  dispatch?: (tr: unknown) => void;
+  view?: { dispatch?: (tr: unknown) => void };
+};
+
+/** Every occurrence of `pattern` as absolute document positions, per text block. */
+function findTextRanges(root: PmNode, pattern: string): Array<{ from: number; to: number }> {
+  const out: Array<{ from: number; to: number }> = [];
+  root.descendants((block, blockPos) => {
+    if (!block.isTextblock) return true;
+    let text = "";
+    const positions: number[] = [];
+    block.descendants((node, pos) => {
+      if (node.isText && node.text) {
+        for (let i = 0; i < node.text.length; i += 1) {
+          text += node.text[i];
+          positions.push(blockPos + 1 + pos + i);
+        }
+      } else if (node.isLeaf) {
+        text += "￼"; // a non-text leaf breaks a match
+        positions.push(-1);
+      }
+      return true;
+    });
+    for (let i = text.indexOf(pattern); i >= 0; i = text.indexOf(pattern, i + 1)) {
+      out.push({ from: positions[i], to: positions[i + pattern.length - 1] + 1 });
+    }
+    return false;
+  });
+  return out;
+}
+
+/** Start position of the text carrying this tracked change's mark, if any. */
+function changeAnchor(root: PmNode, redlineId: string): number | undefined {
+  let anchor: number | undefined;
+  root.descendants((node, pos) => {
+    if (anchor !== undefined) return false;
+    if (node.isText && node.marks?.some((m) => m.attrs?.id === redlineId)) anchor = pos;
+    return true;
+  });
+  return anchor;
+}
+
+/**
+ * Fallback swap at the editor-state level, used only when the document API's
+ * `replace` throws: replace the occurrence of `searchText` nearest `anchor`.
+ * Runs after the change was resolved, so the text is plain and the edit is not
+ * tracked (outside suggesting mode).
+ */
+function replaceViaState(
+  editor: Editor,
+  searchText: string,
+  replacement: string,
+  anchor: number | undefined,
+): boolean {
+  const ed = editor as unknown as StateEditor;
+  const state = ed.state;
+  const dispatch = ed.dispatch?.bind(ed) ?? ed.view?.dispatch?.bind(ed.view);
+  if (!state || !dispatch) return false;
+  const ranges = findTextRanges(state.doc, searchText).filter((r) => r.from >= 0);
+  if (ranges.length === 0) return false;
+  const at = anchor ?? ranges[0].from;
+  const best = ranges.reduce((a, b) => (Math.abs(b.from - at) < Math.abs(a.from - at) ? b : a));
+  dispatch(state.tr.insertText(replacement, best.from, best.to));
+  return true;
+}
+
+/** Accept tracked changes our own swap created (e.g. when suggesting mode tracked it). */
+function acceptNewChanges(doc: DocApiLike, before: Set<string>): void {
+  try {
+    for (const it of doc.trackChanges.list({ in: "all" }).items ?? []) {
+      if (!before.has(it.id)) doc.trackChanges.decide({ decision: "accept", target: { id: it.id } });
+    }
+  } catch {
+    /* best effort */
+  }
+}
+
+const decisionFailed = (receipt: unknown): boolean =>
+  typeof receipt === "object" &&
+  receipt !== null &&
+  (receipt as { success?: unknown }).success === false;
 
 /**
  * Find the live text range of `pattern` (a mutation-ready target), or undefined.
@@ -370,32 +469,77 @@ export function applyRedline(
   // 1. Pre-check: never touch the document if the text cannot be located.
   if (!findTarget(doc, searchText)) return { ok: false, reason: "no-target" };
 
+  // Where the change sits, so a fallback swap picks the right occurrence.
+  let anchor: number | undefined;
+  try {
+    const root = (editor as unknown as StateEditor).state?.doc;
+    if (root) anchor = changeAnchor(root, redlineId);
+  } catch {
+    anchor = undefined;
+  }
+
   // 2. Resolve the tracked change so its text is plain. When SuperDoc lists a
   //    replacement as an insert and a delete, resolve the struck half too.
+  //    `decide` reports "produced no change" as a receipt, not a throw.
   try {
-    doc.trackChanges.decide({
+    const receipt = doc.trackChanges.decide({
       decision: isDeletion ? "reject" : "accept",
       target: { id: redlineId },
     });
+    if (decisionFailed(receipt)) {
+      return { ok: false, reason: "resolve-failed", detail: JSON.stringify(receipt) };
+    }
     if (!isDeletion && matched.pairedWithChangeId) {
       doc.trackChanges.decide({
         decision: "accept",
         target: { id: matched.pairedWithChangeId },
       });
     }
-  } catch {
-    return { ok: false, reason: "resolve-failed" };
+  } catch (error) {
+    return { ok: false, reason: "resolve-failed", detail: String(error) };
   }
 
-  // 3. Replace the now-plain text. Re-resolve the target: positions moved when
-  //    the change was resolved.
-  const target = findTarget(doc, searchText);
-  if (!target) return { ok: false, reason: "no-target" };
+  // The approved text is the suggestion itself: resolving it was the whole job.
+  if (replacement === searchText) return { ok: true };
+
+  // 3. Replace the now-plain text with the approved text. Re-resolve the target:
+  //    positions moved when the change was resolved.
+  let before = new Set<string>();
   try {
-    doc.replace({ target, text: replacement }, { changeMode: "direct" });
+    before = new Set((doc.trackChanges.list({ in: "all" }).items ?? []).map((it) => it.id));
   } catch {
-    return { ok: false, reason: "replace-failed" };
+    /* keep empty */
   }
+  const target = findTarget(doc, searchText);
+  let replaceError: string | undefined;
+  if (target) {
+    try {
+      doc.replace({ target, text: replacement }, { changeMode: "direct" });
+      acceptNewChanges(doc, before);
+      return { ok: true };
+    } catch (error) {
+      replaceError = String(error);
+    }
+  }
+  // The document API could not place the swap (QA run 2: `replace` threw on the
+  // live CM editor right after the accept). Make it at the editor-state level.
+  let viaState = false;
+  try {
+    viaState = editor !== null && replaceViaState(editor, searchText, replacement, anchor);
+  } catch (error) {
+    replaceError = `${replaceError ?? ""} | state: ${String(error)}`;
+  }
+  console.info("[redlines] apply", {
+    id: redlineId,
+    outcome: viaState ? "applied-via-state" : "replace-failed",
+    replaceError: replaceError ?? (target ? undefined : "no target after resolve"),
+  });
+  if (!viaState) {
+    return target
+      ? { ok: false, reason: "replace-failed", detail: replaceError }
+      : { ok: false, reason: "no-target" };
+  }
+  acceptNewChanges(doc, before);
   return { ok: true };
 }
 

@@ -71,7 +71,7 @@ export type SuperdocOutbound =
   | { type: "superdoc:error"; payload: { message: string } }
   | { type: "superdoc:redlines"; payload: { redlines: RedlineSpan[] } }
   | { type: "superdoc:redline-clicked"; payload: { redlineId: string } }
-  | { type: "superdoc:redline-applied"; payload: { redlineId: string; ok: boolean; reason?: string } }
+  | { type: "superdoc:redline-applied"; payload: { redlineId: string; ok: boolean; reason?: string; detail?: string } }
   | { type: "superdoc:collab-lost"; payload: { reason: string; attempts: number } }
   | { type: "superdoc:presence"; payload: { users: PresenceUser[] } }
   | { type: "superdoc:selection"; payload: { hasSelection: boolean; excerpt: string } }
@@ -223,10 +223,13 @@ export function buildRedlineApplied(
   redlineId: string,
   ok: boolean,
   reason?: string,
+  detail?: string,
 ): SuperdocOutbound {
   return {
     type: "superdoc:redline-applied",
-    payload: reason ? { redlineId, ok, reason } : { redlineId, ok },
+    payload: reason
+      ? { redlineId, ok, reason, ...(detail ? { detail } : {}) }
+      : { redlineId, ok },
   };
 }
 

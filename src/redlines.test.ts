@@ -290,7 +290,25 @@ describe("applyRedline", () => {
       },
       onReplace,
     });
-    expect(applyRedline(editor, "tc1", "x")).toEqual({ ok: false, reason: "resolve-failed" });
+    expect(applyRedline(editor, "tc1", "x")).toEqual({
+      ok: false,
+      reason: "resolve-failed",
+      detail: "Error: nope",
+    });
+    expect(onReplace).not.toHaveBeenCalled();
+  });
+
+  it("treats a decide receipt of success:false as resolve-failed (SuperDoc does not throw)", () => {
+    const onReplace = vi.fn();
+    const doc = (fakeEditor({
+      items: [{ id: "tc1", type: "insert", insertedText: "clause" }],
+      onReplace,
+    }) as unknown as { doc: { trackChanges: { decide: unknown } } }).doc;
+    doc.trackChanges.decide = () => ({ success: false, failure: { code: "NO_OP" } });
+    expect(applyRedline({ doc } as unknown as Editor, "tc1", "x")).toMatchObject({
+      ok: false,
+      reason: "resolve-failed",
+    });
     expect(onReplace).not.toHaveBeenCalled();
   });
 });

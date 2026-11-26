@@ -153,7 +153,9 @@ function applyRedlineClean(redlineId: string, replacement: string): void {
   try {
     const result = applyRedline(editorInstance, redlineId, replacement);
     postToHost(
-      buildRedlineApplied(redlineId, result.ok, result.ok ? undefined : result.reason),
+      result.ok
+        ? buildRedlineApplied(redlineId, true)
+        : buildRedlineApplied(redlineId, false, result.reason, result.detail),
       hostTarget(),
     );
   } finally {
