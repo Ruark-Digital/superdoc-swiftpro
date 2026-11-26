@@ -26,6 +26,7 @@ function fakeEditor(opts: {
   listThrows?: boolean;
   /** Result of `trackChanges.get`; omit to model a build without it. */
   getResult?: unknown;
+  extractResult?: unknown;
 }): Editor {
   const doc = {
     trackChanges: {
@@ -36,6 +37,7 @@ function fakeEditor(opts: {
       decide: (input: unknown) => opts.onDecide?.(input),
       ...(opts.getResult !== undefined ? { get: () => opts.getResult } : {}),
     },
+    ...(opts.extractResult !== undefined ? { extract: () => opts.extractResult } : {}),
     query: {
       match: (selector: unknown) => {
         opts.onFind?.(selector);
@@ -403,5 +405,43 @@ describe("replacement whose list item has only a glued excerpt", () => {
     expect(result).toEqual({ ok: false, reason: "no-text" });
     expect(onFind).not.toHaveBeenCalled();
     expect(onDecide).not.toHaveBeenCalled();
+  });
+});
+
+describe("replacement halves from the per-run extract view", () => {
+  const glued = { id: "r1", type: "replacement", excerpt: "RemoOnsi" };
+  const extractResult = {
+    blocks: [
+      {
+        textSpans: [
+          { text: "Location: " },
+          { text: "Remote", trackedChanges: [{ entityId: "r1", type: "delete" }] },
+          { text: "Onsite", trackedChanges: [{ entityId: "r1", type: "insert" }] },
+        ],
+      },
+    ],
+  };
+
+  it("joins each half and applies cleanly when get() has nothing", () => {
+    const onFind = vi.fn();
+    const onDecide = vi.fn();
+    const editor = fakeEditor({ items: [glued], extractResult, onFind, onDecide });
+    expect(applyRedline(editor, "r1", "Hybrid")).toEqual({ ok: true });
+    expect(onFind).toHaveBeenCalledWith(expect.objectContaining({ pattern: "Onsite" }));
+    expect(extractRedlines(editor)[0]).toMatchObject({
+      deletedText: "Remote",
+      insertedText: "Onsite",
+    });
+  });
+
+  it("accepts the struck half too when an insert is listed apart from its delete", () => {
+    const onDecide = vi.fn();
+    const editor = fakeEditor({
+      items: [{ id: "i1", type: "insert", insertedText: "Onsite", pairedWithChangeId: "d1" }],
+      onDecide,
+    });
+    expect(applyRedline(editor, "i1", "Hybrid")).toEqual({ ok: true });
+    expect(onDecide).toHaveBeenCalledWith({ decision: "accept", target: { id: "i1" } });
+    expect(onDecide).toHaveBeenCalledWith({ decision: "accept", target: { id: "d1" } });
   });
 });

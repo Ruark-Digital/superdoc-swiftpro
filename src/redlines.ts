@@ -37,6 +37,17 @@ interface TrackedChangeItem {
   excerpt?: string;
   insertedText?: string;
   deletedText?: string;
+  /** The other half of a delete + insert pair, when SuperDoc lists them apart. */
+  pairedWithChangeId?: string | null;
+  grouping?: string;
+}
+
+/** Per-run view of the document, the source of truth for each half's text. */
+interface ExtractBlockLike {
+  textSpans?: Array<{
+    text: string;
+    trackedChanges?: Array<{ entityId: string; type: string }>;
+  }>;
 }
 
 /**
@@ -54,6 +65,7 @@ interface DocApiLike {
       target: { id: string };
     }) => unknown;
   };
+  extract?: (input?: Record<string, never>) => { blocks?: ExtractBlockLike[] };
   replace: (
     input: { target?: unknown; ref?: string; text: string },
     options?: { changeMode?: "direct" | "tracked" },
@@ -154,17 +166,43 @@ export function trackedChangeToSpan(item: TrackedChangeItem): RedlineSpan | null
 function withFullTexts(doc: DocApiLike, item: TrackedChangeItem): TrackedChangeItem {
   if (item.type !== "replacement") return item;
   if (item.insertedText && item.deletedText) return item;
+  let out = item;
   try {
     const full = doc.trackChanges.get?.({ id: item.id });
-    if (!full) return item;
-    return {
-      ...item,
-      insertedText: item.insertedText ?? full.insertedText,
-      deletedText: item.deletedText ?? full.deletedText,
+    if (full) {
+      out = {
+        ...item,
+        insertedText: item.insertedText ?? full.insertedText,
+        deletedText: item.deletedText ?? full.deletedText,
+      };
+    }
+  } catch {
+    /* fall through to the per-run view */
+  }
+  if (out.insertedText && out.deletedText) return out;
+  // The per-run view tags every run with the change it belongs to and whether it
+  // is the inserted or the deleted half: join each half in document order.
+  try {
+    let inserted = "";
+    let deleted = "";
+    for (const block of doc.extract?.({})?.blocks ?? []) {
+      for (const span of block.textSpans ?? []) {
+        for (const tc of span.trackedChanges ?? []) {
+          if (tc.entityId !== item.id) continue;
+          if (tc.type === "insert") inserted += span.text;
+          else if (tc.type === "delete") deleted += span.text;
+        }
+      }
+    }
+    out = {
+      ...out,
+      insertedText: out.insertedText ?? (inserted || undefined),
+      deletedText: out.deletedText ?? (deleted || undefined),
     };
   } catch {
-    return item;
+    /* leave as is */
   }
+  return out;
 }
 
 /**
@@ -292,6 +330,17 @@ export function applyRedline(
   }
   if (!matched) return { ok: false, reason: "not-found" }; // change is gone from this document
 
+  // Diagnostic for field debugging: how SuperDoc describes this change.
+  console.info("[redlines] apply", {
+    id: redlineId,
+    type: matched.type,
+    grouping: matched.grouping,
+    pairedWithChangeId: matched.pairedWithChangeId,
+    insertedText: matched.insertedText,
+    deletedText: matched.deletedText,
+    excerpt: matched.excerpt,
+  });
+
   // The text that remains (insertion / replacement) or was struck (deletion).
   const isDeletion = matched.type === "delete";
   const span = trackedChangeToSpan(withFullTexts(doc, matched));
@@ -308,12 +357,19 @@ export function applyRedline(
   // 1. Pre-check: never touch the document if the text cannot be located.
   if (!findTarget(doc, searchText)) return { ok: false, reason: "no-target" };
 
-  // 2. Resolve the tracked change so its text is plain.
+  // 2. Resolve the tracked change so its text is plain. When SuperDoc lists a
+  //    replacement as an insert and a delete, resolve the struck half too.
   try {
     doc.trackChanges.decide({
       decision: isDeletion ? "reject" : "accept",
       target: { id: redlineId },
     });
+    if (!isDeletion && matched.pairedWithChangeId) {
+      doc.trackChanges.decide({
+        decision: "accept",
+        target: { id: matched.pairedWithChangeId },
+      });
+    }
   } catch {
     return { ok: false, reason: "resolve-failed" };
   }
