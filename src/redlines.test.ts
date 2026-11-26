@@ -24,6 +24,8 @@ function fakeEditor(opts: {
   /** Override the `find` result; defaults to one match carrying FAKE_TARGET. */
   findResult?: unknown;
   listThrows?: boolean;
+  /** Result of `trackChanges.get`; omit to model a build without it. */
+  getResult?: unknown;
 }): Editor {
   const doc = {
     trackChanges: {
@@ -32,6 +34,7 @@ function fakeEditor(opts: {
         return { items: opts.items ?? [] };
       },
       decide: (input: unknown) => opts.onDecide?.(input),
+      ...(opts.getResult !== undefined ? { get: () => opts.getResult } : {}),
     },
     query: {
       match: (selector: unknown) => {
@@ -369,5 +372,36 @@ describe("focusRedline", () => {
     focusRedline(null, "tc9");
     focusRedline({ navigateTo } as never, "");
     expect(navigateTo).not.toHaveBeenCalled();
+  });
+});
+
+describe("replacement whose list item has only a glued excerpt", () => {
+  const glued = { id: "r1", type: "replacement", excerpt: "RemoOnsi" };
+
+  it("reads both halves from trackChanges.get and applies cleanly", () => {
+    const onFind = vi.fn();
+    const onReplace = vi.fn();
+    const editor = fakeEditor({
+      items: [glued],
+      getResult: { id: "r1", type: "replacement", deletedText: "Remote", insertedText: "Onsite" },
+      onFind,
+      onReplace,
+    });
+    expect(applyRedline(editor, "r1", "Hybrid")).toEqual({ ok: true });
+    expect(onFind).toHaveBeenCalledWith(expect.objectContaining({ pattern: "Onsite" }));
+    expect(onReplace).toHaveBeenCalled();
+    expect(extractRedlines(editor)[0]).toMatchObject({
+      deletedText: "Remote",
+      insertedText: "Onsite",
+    });
+  });
+
+  it("never searches the glued excerpt; reports no-text and leaves the document alone", () => {
+    const onFind = vi.fn();
+    const onDecide = vi.fn();
+    const result = applyRedline(fakeEditor({ items: [glued], onFind, onDecide }), "r1", "x");
+    expect(result).toEqual({ ok: false, reason: "no-text" });
+    expect(onFind).not.toHaveBeenCalled();
+    expect(onDecide).not.toHaveBeenCalled();
   });
 });

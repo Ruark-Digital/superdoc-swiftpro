@@ -47,6 +47,8 @@ interface TrackedChangeItem {
 interface DocApiLike {
   trackChanges: {
     list: (input?: { in?: "all" }) => { items?: TrackedChangeItem[] };
+    /** Single change with its full inserted/deleted text (optional: older builds). */
+    get?: (input: { id: string }) => TrackedChangeItem | null | undefined;
     decide: (input: {
       decision: "accept" | "reject";
       target: { id: string };
@@ -144,6 +146,28 @@ export function trackedChangeToSpan(item: TrackedChangeItem): RedlineSpan | null
 }
 
 /**
+ * A replacement's list item can omit `insertedText` / `deletedText` and carry
+ * only a truncated, concatenated `excerpt` ("RemoOnsi" for Remote → Onsite).
+ * Ask for the single change, which carries the two halves in full; if it cannot,
+ * the item is returned unchanged.
+ */
+function withFullTexts(doc: DocApiLike, item: TrackedChangeItem): TrackedChangeItem {
+  if (item.type !== "replacement") return item;
+  if (item.insertedText && item.deletedText) return item;
+  try {
+    const full = doc.trackChanges.get?.({ id: item.id });
+    if (!full) return item;
+    return {
+      ...item,
+      insertedText: item.insertedText ?? full.insertedText,
+      deletedText: item.deletedText ?? full.deletedText,
+    };
+  } catch {
+    return item;
+  }
+}
+
+/**
  * Extract all tracked changes from the editor as `RedlineSpan[]`.
  *
  * De-dupes by `redlineId` (mirrors the host's `redlineScan.ts`): SuperDoc's
@@ -168,7 +192,7 @@ export function extractRedlines(editor: Editor | null): RedlineSpan[] {
 
   const byId = new Map<string, RedlineSpan>();
   for (const item of items) {
-    const span = trackedChangeToSpan(item);
+    const span = trackedChangeToSpan(withFullTexts(doc, item));
     if (span && !byId.has(span.redlineId)) byId.set(span.redlineId, span);
   }
   return [...byId.values()];
@@ -270,7 +294,12 @@ export function applyRedline(
 
   // The text that remains (insertion / replacement) or was struck (deletion).
   const isDeletion = matched.type === "delete";
-  const span = trackedChangeToSpan(matched);
+  const span = trackedChangeToSpan(withFullTexts(doc, matched));
+  // A replacement whose halves are still unknown only has the glued, truncated
+  // excerpt, which never matches the document: say so instead of searching it.
+  if (matched.type === "replacement" && span && !span.insertedText) {
+    return { ok: false, reason: "no-text" };
+  }
   const searchText = isDeletion
     ? (matched.deletedText ?? matched.excerpt ?? "")
     : (span?.text ?? "");
