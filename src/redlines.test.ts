@@ -24,6 +24,9 @@ function fakeEditor(opts: {
   /** Override the `find` result; defaults to one match carrying FAKE_TARGET. */
   findResult?: unknown;
   listThrows?: boolean;
+  /** Result of `trackChanges.get`; omit to model a build without it. */
+  getResult?: unknown;
+  extractResult?: unknown;
 }): Editor {
   const doc = {
     trackChanges: {
@@ -32,7 +35,9 @@ function fakeEditor(opts: {
         return { items: opts.items ?? [] };
       },
       decide: (input: unknown) => opts.onDecide?.(input),
+      ...(opts.getResult !== undefined ? { get: () => opts.getResult } : {}),
     },
+    ...(opts.extractResult !== undefined ? { extract: () => opts.extractResult } : {}),
     query: {
       match: (selector: unknown) => {
         opts.onFind?.(selector);
@@ -86,6 +91,22 @@ describe("trackedChangeToSpan", () => {
     });
   });
 
+  it("keeps a replacement's deleted and inserted text separate", () => {
+    expect(
+      trackedChangeToSpan({
+        id: "r1",
+        type: "replacement",
+        deletedText: "Senior",
+        insertedText: "Principal",
+        excerpt: "SeniorPrincipal",
+      }),
+    ).toMatchObject({ kind: "insertion", text: "Principal", deletedText: "Senior", insertedText: "Principal" });
+    // insertedText missing: recover it from the concatenated excerpt.
+    expect(
+      trackedChangeToSpan({ id: "r2", type: "replacement", deletedText: "Senior", excerpt: "SeniorPrincipal" }),
+    ).toMatchObject({ deletedText: "Senior", insertedText: "Principal" });
+  });
+
   it("returns null for unknown types and missing ids", () => {
     expect(trackedChangeToSpan({ id: "tc5", type: "weird" })).toBeNull();
     expect(trackedChangeToSpan({ id: "", type: "insert" })).toBeNull();
@@ -117,16 +138,70 @@ describe("extractRedlines", () => {
   });
 });
 
+describe("applyRedline result", () => {
+  it("reports ok when the swap was made", () => {
+    const editor = fakeEditor({
+      items: [{ id: "tc1", type: "insert", insertedText: "clause" }],
+    });
+    expect(applyRedline(editor, "tc1", "x")).toEqual({ ok: true });
+  });
+  it("reports why nothing changed (so the host never shows a no-op as resolved)", () => {
+    expect(
+      applyRedline(fakeEditor({ items: [], findResult: { items: [] } }), "gone", "x"),
+    ).toEqual({
+      ok: false,
+      reason: "not-found",
+    });
+    expect(
+      applyRedline(fakeEditor({ items: [{ id: "t", type: "insert" }] }), "t", "x"),
+    ).toEqual({ ok: false, reason: "no-text" });
+    expect(
+      applyRedline(
+        fakeEditor({
+          items: [{ id: "t", type: "insert", insertedText: "a" }],
+          findResult: { items: [] },
+        }),
+        "t",
+        "x",
+      ),
+    ).toEqual({ ok: false, reason: "no-target" });
+    expect(applyRedline(null, "t", "x")).toEqual({ ok: false, reason: "no-editor" });
+  });
+
+  it("treats a change already applied by the other side as applied (N9)", () => {
+    // The PM applied it; the change synced here, so the tracked change is gone
+    // and the document already holds the approved text.
+    const onReplace = vi.fn();
+    const onDecide = vi.fn();
+    const onFind = vi.fn();
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    const editor = fakeEditor({ items: [], onReplace, onDecide, onFind });
+    expect(applyRedline(editor, "tc9", "Hybrid")).toEqual({
+      ok: true,
+      alreadyApplied: true,
+    });
+    expect(onFind).toHaveBeenCalledWith({ type: "text", pattern: "Hybrid", caseSensitive: true });
+    expect(onDecide).not.toHaveBeenCalled();
+    expect(onReplace).not.toHaveBeenCalled();
+    expect(info).toHaveBeenCalledWith("[redlines] apply", {
+      id: "tc9",
+      outcome: "already-applied",
+    });
+    info.mockRestore();
+  });
+});
+
 describe("applyRedline", () => {
   it("does nothing when the id is not found", () => {
     const onReplace = vi.fn();
-    applyRedline(fakeEditor({ items: [], onReplace }), "missing", "x");
+    applyRedline(fakeEditor({ items: [], onReplace, findResult: { items: [] } }), "missing", "x");
     expect(onReplace).not.toHaveBeenCalled();
   });
 
-  it("text-searches the change content, replaces the match target (direct), then accepts", () => {
-    const onReplace = vi.fn();
-    const onDecide = vi.fn();
+  it("resolves the tracked change FIRST (accept), then direct-replaces the plain text", () => {
+    const calls: string[] = [];
+    const onReplace = vi.fn(() => calls.push("replace"));
+    const onDecide = vi.fn(() => calls.push("decide"));
     const onFind = vi.fn();
     const editor = fakeEditor({
       items: [{ id: "tc1", type: "insert", insertedText: "the inserted clause" }],
@@ -134,17 +209,62 @@ describe("applyRedline", () => {
       onReplace,
       onDecide,
     });
-    applyRedline(editor, "tc1", "new text");
+    expect(applyRedline(editor, "tc1", "new text")).toEqual({ ok: true });
     expect(onFind).toHaveBeenCalledWith({
       type: "text",
       pattern: "the inserted clause",
       caseSensitive: true,
     });
+    expect(onDecide).toHaveBeenCalledWith({ decision: "accept", target: { id: "tc1" } });
     expect(onReplace).toHaveBeenCalledWith(
       { target: FAKE_TARGET, text: "new text" },
       { changeMode: "direct" },
     );
-    expect(onDecide).toHaveBeenCalledWith({ decision: "accept", target: { id: "tc1" } });
+    expect(calls).toEqual(["decide", "replace"]);
+  });
+
+  it("rejects a deletion first (restoring its text), then replaces it", () => {
+    const calls: string[] = [];
+    const editor = fakeEditor({
+      items: [{ id: "d1", type: "delete", deletedText: "old clause" }],
+      onDecide: (i) => calls.push(JSON.stringify(i)),
+      onReplace: () => calls.push("replace"),
+    });
+    expect(applyRedline(editor, "d1", "new")).toEqual({ ok: true });
+    expect(calls).toEqual([JSON.stringify({ decision: "reject", target: { id: "d1" } }), "replace"]);
+  });
+
+  it("replaces the INSERTED half of a replacement, not the concatenated excerpt", () => {
+    const onFind = vi.fn();
+    applyRedline(
+      fakeEditor({
+        items: [
+          { id: "r1", type: "replacement", deletedText: "Senior", insertedText: "Principal", excerpt: "SeniorPrincipal" },
+        ],
+        onFind,
+      }),
+      "r1",
+      "Lead",
+    );
+    expect(onFind).toHaveBeenCalledWith(expect.objectContaining({ pattern: "Principal" }));
+  });
+
+  it("does not touch the document when the text cannot be located", () => {
+    const onReplace = vi.fn();
+    const onDecide = vi.fn();
+    const result = applyRedline(
+      fakeEditor({
+        items: [{ id: "tc1", type: "insert", insertedText: "x" }],
+        findResult: { items: [] },
+        onReplace,
+        onDecide,
+      }),
+      "tc1",
+      "y",
+    );
+    expect(result).toEqual({ ok: false, reason: "no-target" });
+    expect(onReplace).not.toHaveBeenCalled();
+    expect(onDecide).not.toHaveBeenCalled();
   });
 
   it("reads the target from the QueryResult `context[]` shape too", () => {
@@ -161,41 +281,114 @@ describe("applyRedline", () => {
     );
   });
 
-  it("does not replace when the change has no searchable text", () => {
-    const onFind = vi.fn();
-    const editor = fakeEditor({
-      items: [{ id: "tc1", type: "insert", handle: { ref: "tc::body::tc1" } }],
-      onFind,
-    });
-    applyRedline(editor, "tc1", "x");
-    expect(onFind).not.toHaveBeenCalled();
-  });
-
-  it("does not replace when find yields no target", () => {
+  it("reports resolve-failed and does not replace when the change cannot be resolved", () => {
     const onReplace = vi.fn();
-    const onDecide = vi.fn();
     const editor = fakeEditor({
       items: [{ id: "tc1", type: "insert", insertedText: "clause" }],
-      findResult: { items: [] },
+      onDecide: () => {
+        throw new Error("nope");
+      },
       onReplace,
-      onDecide,
     });
-    applyRedline(editor, "tc1", "x");
+    expect(applyRedline(editor, "tc1", "x")).toEqual({
+      ok: false,
+      reason: "resolve-failed",
+      detail: "Error: nope",
+    });
     expect(onReplace).not.toHaveBeenCalled();
-    expect(onDecide).not.toHaveBeenCalled();
   });
 
-  it("does not accept if the replace throws", () => {
-    const onDecide = vi.fn();
-    const editor = fakeEditor({
+  it("treats a decide receipt of success:false as resolve-failed (SuperDoc does not throw)", () => {
+    const onReplace = vi.fn();
+    const doc = (fakeEditor({
       items: [{ id: "tc1", type: "insert", insertedText: "clause" }],
-      onReplace: () => {
-        throw new Error("replace failed");
-      },
-      onDecide,
+      onReplace,
+    }) as unknown as { doc: { trackChanges: { decide: unknown } } }).doc;
+    doc.trackChanges.decide = () => ({ success: false, failure: { code: "NO_OP" } });
+    expect(applyRedline({ doc } as unknown as Editor, "tc1", "x")).toMatchObject({
+      ok: false,
+      reason: "resolve-failed",
     });
-    applyRedline(editor, "tc1", "x");
-    expect(onDecide).not.toHaveBeenCalled();
+    expect(onReplace).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * A tiny model of SuperDoc's review-state protection: a direct edit that touches
+ * text still inside a tracked change is force-tracked (struck deletion + tracked
+ * insertion), exactly as `#dispatchTransaction` does. This is what made the old
+ * replace-then-accept order leave "Lag~~Auckland~~STUBos".
+ */
+describe("applyRedline against the review-state protection rule", () => {
+  type Seg = { text: string; tracked?: { id: string; type: "insert" | "delete" } };
+
+  function modelEditor(initial: Seg[]) {
+    let segs: Seg[] = initial.map((s) => ({ ...s }));
+    const doc = {
+      trackChanges: {
+        list: () => ({
+          items: segs
+            .filter((s) => s.tracked)
+            .map((s) => ({
+              id: s.tracked!.id,
+              type: s.tracked!.type,
+              insertedText: s.tracked!.type === "insert" ? s.text : undefined,
+              deletedText: s.tracked!.type === "delete" ? s.text : undefined,
+            })),
+        }),
+        decide: ({ decision, target }: { decision: string; target: { id: string } }) => {
+          segs = segs.flatMap((s) => {
+            if (s.tracked?.id !== target.id) return [s];
+            const keep =
+              (s.tracked.type === "insert" && decision === "accept") ||
+              (s.tracked.type === "delete" && decision === "reject");
+            return keep ? [{ text: s.text }] : [];
+          });
+        },
+      },
+      query: {
+        match: ({ pattern }: { pattern: string }) => {
+          const i = segs.findIndex((s) => s.text === pattern);
+          return i < 0 ? { items: [] } : { items: [{ target: { seg: i } }] };
+        },
+      },
+      replace: ({ target, text }: { target: { seg: number }; text: string }) => {
+        const seg = segs[target.seg];
+        if (seg.tracked) {
+          // Protected review state: becomes tracked deletion + tracked insertion.
+          segs.splice(target.seg, 1, { ...seg, tracked: { id: seg.tracked.id, type: "delete" } }, {
+            text,
+            tracked: { id: "new", type: "insert" },
+          });
+        } else {
+          seg.text = text;
+        }
+      },
+      selection: { current: () => ({}) },
+    };
+    return { editor: { doc } as unknown as Editor, segs: () => segs };
+  }
+
+  it("ends with only the approved text and no tracked marks for the applied suggestion", () => {
+    const { editor, segs } = modelEditor([
+      { text: "Lag" },
+      { text: "Auckland", tracked: { id: "t1", type: "insert" } },
+      { text: "os" },
+    ]);
+    expect(applyRedline(editor, "t1", "STUB")).toEqual({ ok: true });
+    expect(segs().map((s) => s.text).join("")).toBe("LagSTUBos");
+    expect(segs().some((s) => s.tracked)).toBe(false);
+  });
+
+  it("a replacement pair keeps only the approved text (no struck original)", () => {
+    const { editor, segs } = modelEditor([
+      { text: "Senior", tracked: { id: "t2", type: "delete" } },
+      { text: "Principal", tracked: { id: "t2", type: "insert" } },
+    ]);
+    // Both halves share an id in SuperDoc; model resolves by id.
+    expect(applyRedline(editor, "t2", "Lead")).toEqual({ ok: true });
+    expect(segs().map((s) => s.text).join("")).toBe("Lead");
+    expect(segs().some((s) => s.tracked)).toBe(false);
   });
 });
 
@@ -223,5 +416,74 @@ describe("focusRedline", () => {
     focusRedline(null, "tc9");
     focusRedline({ navigateTo } as never, "");
     expect(navigateTo).not.toHaveBeenCalled();
+  });
+});
+
+describe("replacement whose list item has only a glued excerpt", () => {
+  const glued = { id: "r1", type: "replacement", excerpt: "RemoOnsi" };
+
+  it("reads both halves from trackChanges.get and applies cleanly", () => {
+    const onFind = vi.fn();
+    const onReplace = vi.fn();
+    const editor = fakeEditor({
+      items: [glued],
+      getResult: { id: "r1", type: "replacement", deletedText: "Remote", insertedText: "Onsite" },
+      onFind,
+      onReplace,
+    });
+    expect(applyRedline(editor, "r1", "Hybrid")).toEqual({ ok: true });
+    expect(onFind).toHaveBeenCalledWith(expect.objectContaining({ pattern: "Onsite" }));
+    expect(onReplace).toHaveBeenCalled();
+    expect(extractRedlines(editor)[0]).toMatchObject({
+      deletedText: "Remote",
+      insertedText: "Onsite",
+    });
+  });
+
+  it("never searches the glued excerpt; reports no-text and leaves the document alone", () => {
+    const onFind = vi.fn();
+    const onDecide = vi.fn();
+    const result = applyRedline(fakeEditor({ items: [glued], onFind, onDecide }), "r1", "x");
+    expect(result).toEqual({ ok: false, reason: "no-text" });
+    expect(onFind).not.toHaveBeenCalled();
+    expect(onDecide).not.toHaveBeenCalled();
+  });
+});
+
+describe("replacement halves from the per-run extract view", () => {
+  const glued = { id: "r1", type: "replacement", excerpt: "RemoOnsi" };
+  const extractResult = {
+    blocks: [
+      {
+        textSpans: [
+          { text: "Location: " },
+          { text: "Remote", trackedChanges: [{ entityId: "r1", type: "delete" }] },
+          { text: "Onsite", trackedChanges: [{ entityId: "r1", type: "insert" }] },
+        ],
+      },
+    ],
+  };
+
+  it("joins each half and applies cleanly when get() has nothing", () => {
+    const onFind = vi.fn();
+    const onDecide = vi.fn();
+    const editor = fakeEditor({ items: [glued], extractResult, onFind, onDecide });
+    expect(applyRedline(editor, "r1", "Hybrid")).toEqual({ ok: true });
+    expect(onFind).toHaveBeenCalledWith(expect.objectContaining({ pattern: "Onsite" }));
+    expect(extractRedlines(editor)[0]).toMatchObject({
+      deletedText: "Remote",
+      insertedText: "Onsite",
+    });
+  });
+
+  it("accepts the struck half too when an insert is listed apart from its delete", () => {
+    const onDecide = vi.fn();
+    const editor = fakeEditor({
+      items: [{ id: "i1", type: "insert", insertedText: "Onsite", pairedWithChangeId: "d1" }],
+      onDecide,
+    });
+    expect(applyRedline(editor, "i1", "Hybrid")).toEqual({ ok: true });
+    expect(onDecide).toHaveBeenCalledWith({ decision: "accept", target: { id: "i1" } });
+    expect(onDecide).toHaveBeenCalledWith({ decision: "accept", target: { id: "d1" } });
   });
 });

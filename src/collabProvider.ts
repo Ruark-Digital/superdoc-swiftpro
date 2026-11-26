@@ -3,6 +3,7 @@ import { WebsocketProvider } from "y-websocket";
 import { makeAuthWebSocketClass } from "./collabSocket";
 import { registerCustomMessageHandlers, type CollabMessageHandlers } from "./collabMessages";
 import { diag } from "./diag";
+import { createLossTracker, type LossReason } from "./collabLoss";
 
 export interface CollabConnectConfig {
   wsUrl: string;
@@ -16,6 +17,13 @@ export interface CollabConnectConfig {
    * server's error/presence frames are surfaced instead of dropped.
    */
   handlers?: CollabMessageHandlers;
+  /**
+   * Called once when the connection is not coming back: the first sync failed,
+   * the socket was replaced by another tab, or reconnects keep failing (an
+   * expired session shows up as repeated abnormal closes). The provider is
+   * disconnected so it stops retrying forever.
+   */
+  onConnectionLost?: (info: { reason: LossReason; attempts: number }) => void;
 }
 
 /**
@@ -165,6 +173,16 @@ export function connectWithTimeout(
     // disrupts live updates. Attached best-effort; a fake provider in tests may
     // not emit "status", which is fine.
     let reconnects = 0;
+    const loss = createLossTracker((info) => {
+      // Stop y-websocket's endless reconnect loop; the host takes over.
+      try {
+        (provider as unknown as { disconnect?: () => void }).disconnect?.();
+      } catch {
+        // already torn down
+      }
+      diag("collab.lost", { roomId: config.roomId, ...info });
+      config.onConnectionLost?.(info);
+    });
     const traced = provider as unknown as {
       on(event: string, cb: (arg: unknown) => void): void;
     };
@@ -172,10 +190,12 @@ export function connectWithTimeout(
       traced.on("status", (s: unknown) => {
         const status = (s as { status?: string })?.status ?? s;
         if (status === "connecting" && settled) reconnects += 1;
+        if (status === "connected") loss.onConnected();
         diag("collab.status", { roomId: config.roomId, status, reconnects });
       });
       traced.on("connection-close", (event: unknown) => {
         const e = event as { code?: number; reason?: string; wasClean?: boolean } | null;
+        if (settled) loss.onFailure(e?.code);
         // The close code/reason is the definitive "why the server dropped us"
         // signal — 1000 (normal) vs 1006 (abnormal / rate-limit / proxy) vs a
         // 4xxx policy/auth code — kept so a lingering loop is diagnosable.
@@ -187,16 +207,29 @@ export function connectWithTimeout(
           wasClean: e?.wasClean ?? null,
         });
       });
-      traced.on("connection-error", () => diag("collab.error", { roomId: config.roomId }));
+      traced.on("connection-error", () => {
+        diag("collab.error", { roomId: config.roomId });
+        if (settled) loss.onFailure();
+      });
     } catch {
       // Non-fatal: diagnostics must never break the connection path.
     }
 
-    const timer = setTimeout(() => finish(false), config.timeoutMs);
+    const timer = setTimeout(() => finish(false, "timeout"), config.timeoutMs);
 
-    function finish(synced: boolean): void {
+    function finish(synced: boolean, reason = "synced"): void {
       if (settled) return;
       settled = true;
+      // Which hydration path follows: JOIN (room populated), SEED (empty room,
+      // rendered from the original docx) or document-only (no sync, so the
+      // original docx with none of the room's tracked changes).
+      if (!synced) loss.onInitialFailure();
+      diag("collab.hydrate", {
+        roomId: config.roomId,
+        outcome: synced ? (roomHasContent(doc) ? "join" : "seed") : "document-only",
+        reason,
+        timeoutMs: config.timeoutMs,
+      });
       clearTimeout(timer);
       if (synced) {
         // After the initial sync, the room needs seeding unless its body
@@ -214,7 +247,7 @@ export function connectWithTimeout(
     provider.on("sync", (isSynced: boolean) => {
       if (isSynced) finish(true);
     });
-    provider.on("connection-error", () => finish(false));
-    provider.on("connection-close", () => finish(false));
+    provider.on("connection-error", () => finish(false, "connection-error"));
+    provider.on("connection-close", () => finish(false, "connection-close"));
   });
 }

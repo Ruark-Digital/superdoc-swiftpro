@@ -5,6 +5,8 @@ import {
   buildCommentCreated,
   buildDocumentState,
   buildRedlineClicked,
+  buildRedlineApplied,
+  buildCollabLost,
   buildRedlines,
   buildSelectionState,
   hasCollabConfig,
@@ -130,8 +132,35 @@ function scheduleRedlinesPush(): void {
  * so a turn-based host that flips "viewing" → "suggesting" must reach us here.
  * No-ops until the SuperDoc instance is ready.
  */
+let currentDocumentMode: DocumentMode = "editing";
+
 function setDocumentMode(mode: DocumentMode): void {
+  currentDocumentMode = mode;
   superdocInstance?.setDocumentMode(mode);
+}
+
+/**
+ * Apply an accepted recommendation as a CLEAN swap. In "suggesting" mode the
+ * replace is recorded as a tracked change (original struck through plus the new
+ * text inserted) even with changeMode "direct", so the accepted text would not
+ * actually replace the highlighted text. Run the swap in "editing" mode and
+ * restore the previous mode afterwards.
+ */
+function applyRedlineClean(redlineId: string, replacement: string): void {
+  const previous = currentDocumentMode;
+  const needsSwitch = previous === "suggesting";
+  if (needsSwitch) superdocInstance?.setDocumentMode("editing");
+  try {
+    const result = applyRedline(editorInstance, redlineId, replacement);
+    postToHost(
+      result.ok
+        ? buildRedlineApplied(redlineId, true)
+        : buildRedlineApplied(redlineId, false, result.reason, result.detail),
+      hostTarget(),
+    );
+  } finally {
+    if (needsSwitch) superdocInstance?.setDocumentMode(previous);
+  }
 }
 
 /** The editor currently driving the toolbar (falls back to the captured one). */
@@ -283,6 +312,7 @@ async function handleInit(init: SuperdocInit): Promise<void> {
   if (initialized) return;
   initialized = true;
   redlineUser = init.payload.user;
+  currentDocumentMode = init.payload.documentMode;
 
   try {
     // Connect-or-fallback: sync a provider first (or null if unreachable).
@@ -295,6 +325,11 @@ async function handleInit(init: SuperdocInit): Promise<void> {
           roomId: init.payload.roomId,
           token: init.payload.token,
           timeoutMs: COLLAB_SYNC_TIMEOUT_MS,
+          // Retries are over (or never started): tell the host so it can say why
+          // instead of the editor silently showing a stale document.
+          onConnectionLost: ({ reason, attempts }) => {
+            postToHost(buildCollabLost(reason, attempts), hostTarget());
+          },
           // Decode the backend's custom collab messages. An `error` frame is the
           // server telling us it rejected something (e.g. an oversized seed)
           // without closing the socket — surface it so it stops being silent.
@@ -495,7 +530,7 @@ window.addEventListener("message", (event) => {
   if (!cmd) return;
   switch (cmd.type) {
     case "superdoc:apply-redline":
-      applyRedline(editorInstance, cmd.payload.redlineId, cmd.payload.replacement);
+      applyRedlineClean(cmd.payload.redlineId, cmd.payload.replacement);
       break;
     case "superdoc:focus-redline":
       // navigateTo lives on the SuperDoc instance.

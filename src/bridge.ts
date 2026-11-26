@@ -20,6 +20,11 @@ export interface RedlineSpan {
   text: string;
   author?: string;
   createdAt?: string;
+  /** Set only for a replacement (delete + insert pair, e.g. Senior -> Principal):
+   *  the removed and the inserted text, so the host can show Original / New
+   *  instead of one concatenated string. `text` stays the inserted text. */
+  deletedText?: string;
+  insertedText?: string;
 }
 
 const DOCUMENT_MODES: readonly DocumentMode[] = ["editing", "viewing", "suggesting"];
@@ -66,6 +71,8 @@ export type SuperdocOutbound =
   | { type: "superdoc:error"; payload: { message: string } }
   | { type: "superdoc:redlines"; payload: { redlines: RedlineSpan[] } }
   | { type: "superdoc:redline-clicked"; payload: { redlineId: string } }
+  | { type: "superdoc:redline-applied"; payload: { redlineId: string; ok: boolean; reason?: string; detail?: string } }
+  | { type: "superdoc:collab-lost"; payload: { reason: string; attempts: number } }
   | { type: "superdoc:presence"; payload: { users: PresenceUser[] } }
   | { type: "superdoc:selection"; payload: { hasSelection: boolean; excerpt: string } }
   | { type: "superdoc:comment-created"; payload: { requestId: string; commentId: string | null } }
@@ -209,6 +216,26 @@ export function buildRedlines(redlines: RedlineSpan[]): SuperdocOutbound {
 
 export function buildRedlineClicked(redlineId: string): SuperdocOutbound {
   return { type: "superdoc:redline-clicked", payload: { redlineId } };
+}
+
+/** Outcome of an `apply-redline` command, so the host never assumes it worked. */
+export function buildRedlineApplied(
+  redlineId: string,
+  ok: boolean,
+  reason?: string,
+  detail?: string,
+): SuperdocOutbound {
+  return {
+    type: "superdoc:redline-applied",
+    payload: reason
+      ? { redlineId, ok, reason, ...(detail ? { detail } : {}) }
+      : { redlineId, ok },
+  };
+}
+
+/** The live collaboration connection is gone for good (the host decides why). */
+export function buildCollabLost(reason: string, attempts: number): SuperdocOutbound {
+  return { type: "superdoc:collab-lost", payload: { reason, attempts } };
 }
 
 export function buildPresence(users: PresenceUser[]): SuperdocOutbound {
