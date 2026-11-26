@@ -146,7 +146,9 @@ describe("applyRedline result", () => {
     expect(applyRedline(editor, "tc1", "x")).toEqual({ ok: true });
   });
   it("reports why nothing changed (so the host never shows a no-op as resolved)", () => {
-    expect(applyRedline(fakeEditor({ items: [] }), "gone", "x")).toEqual({
+    expect(
+      applyRedline(fakeEditor({ items: [], findResult: { items: [] } }), "gone", "x"),
+    ).toEqual({
       ok: false,
       reason: "not-found",
     });
@@ -165,12 +167,34 @@ describe("applyRedline result", () => {
     ).toEqual({ ok: false, reason: "no-target" });
     expect(applyRedline(null, "t", "x")).toEqual({ ok: false, reason: "no-editor" });
   });
+
+  it("treats a change already applied by the other side as applied (N9)", () => {
+    // The PM applied it; the change synced here, so the tracked change is gone
+    // and the document already holds the approved text.
+    const onReplace = vi.fn();
+    const onDecide = vi.fn();
+    const onFind = vi.fn();
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    const editor = fakeEditor({ items: [], onReplace, onDecide, onFind });
+    expect(applyRedline(editor, "tc9", "Hybrid")).toEqual({
+      ok: true,
+      alreadyApplied: true,
+    });
+    expect(onFind).toHaveBeenCalledWith({ type: "text", pattern: "Hybrid", caseSensitive: true });
+    expect(onDecide).not.toHaveBeenCalled();
+    expect(onReplace).not.toHaveBeenCalled();
+    expect(info).toHaveBeenCalledWith("[redlines] apply", {
+      id: "tc9",
+      outcome: "already-applied",
+    });
+    info.mockRestore();
+  });
 });
 
 describe("applyRedline", () => {
   it("does nothing when the id is not found", () => {
     const onReplace = vi.fn();
-    applyRedline(fakeEditor({ items: [], onReplace }), "missing", "x");
+    applyRedline(fakeEditor({ items: [], onReplace, findResult: { items: [] } }), "missing", "x");
     expect(onReplace).not.toHaveBeenCalled();
   });
 

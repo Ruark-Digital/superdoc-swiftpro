@@ -265,7 +265,11 @@ function firstMatchTarget(found: unknown): unknown {
 }
 
 export type ApplyRedlineResult =
-  | { ok: true }
+  | {
+      ok: true;
+      /** The change was already gone and the approved text is present. */
+      alreadyApplied?: true;
+    }
   | {
       ok: false;
       /** Why nothing changed, so the host can tell the user instead of showing a
@@ -328,7 +332,16 @@ export function applyRedline(
   } catch {
     return { ok: false, reason: "no-editor" };
   }
-  if (!matched) return { ok: false, reason: "not-found" }; // change is gone from this document
+  if (!matched) {
+    // The change is gone. When both sides approve, the first side's apply syncs
+    // here before this side's own apply runs, so the document already holds the
+    // approved text (N9): that is applied, not a failure.
+    if (replacement.trim() && findTarget(doc, replacement)) {
+      console.info("[redlines] apply", { id: redlineId, outcome: "already-applied" });
+      return { ok: true, alreadyApplied: true };
+    }
+    return { ok: false, reason: "not-found" };
+  }
 
   // Diagnostic for field debugging: how SuperDoc describes this change.
   console.info("[redlines] apply", {
